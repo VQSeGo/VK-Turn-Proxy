@@ -1,81 +1,201 @@
-# FreeTurn — Android TURN Proxy
+<div align="center">
 
-Android-клиент для [vk-turn-proxy](https://github.com/cacggghp/vk-turn-proxy) — проброс WireGuard/Hysteria-трафика через TURN-серверы.
+# FreeTurn
 
-> **Disclaimer:** Проект предназначен исключительно для образовательных и исследовательских целей.
+**Android-клиент для [vk-turn-proxy](https://github.com/cacggghp/vk-turn-proxy)** — проброс WireGuard / Hysteria через TURN-серверы VK.
+
+![Android](https://img.shields.io/badge/Android-6.0%2B-3DDC84?logo=android&logoColor=white)
+![Kotlin](https://img.shields.io/badge/Kotlin-Compose-7F52FF?logo=kotlin&logoColor=white)
+![Material 3](https://img.shields.io/badge/Material-3-757575?logo=materialdesign&logoColor=white)
+![License](https://img.shields.io/badge/license-GPL--3.0-blue)
+[![Telegram](https://img.shields.io/badge/Telegram-канал-26A5E4?logo=telegram&logoColor=white)](https://t.me/+5BdkU4q_CGQyNTdi)
+
+<p float="left">
+  <img src="docs/screenshots/1.jpg" width="230" />
+  <img src="docs/screenshots/2.jpg" width="230" />
+</p>
+
+</div>
+
+> **Disclaimer.** Проект предназначен **исключительно для образовательных и исследовательских целей.**
+
+---
+
+## Содержание
+
+1. [Принцип работы](#принцип-работы)
+2. [Возможности](#возможности)
+3. [Требования](#требования)
+4. [Как это работает в связке с VPN](#как-это-работает-в-связке-с-vpn)
+5. [Настройка по шагам](#настройка-по-шагам)
+6. [Broadcast API](#broadcast-api)
+7. [Под капотом](#под-капотом)
+8. [Благодарности](#благодарности)
+9. [Лицензия](#лицензия)
+
+---
 
 ## Принцип работы
 
-Пакеты шифруются DTLS 1.2 и отправляются на TURN-сервер по протоколу STUN ChannelData (TCP или UDP). TURN-сервер пересылает трафик по UDP на ваш VPS, где он расшифровывается и передаётся в WireGuard/Hysteria. Учётные данные для TURN генерируются автоматически из ссылки на звонок.
+Пакеты шифруются DTLS 1.2 (или оборачиваются в VLESS) и отправляются на TURN-сервер по протоколу STUN ChannelData (TCP или UDP). TURN пересылает трафик по UDP на ваш VPS, где он расшифровывается и уходит в WireGuard / Hysteria. Учётные данные TURN генерируются автоматически из ссылки на звонок.
+
+---
 
 ## Возможности
 
-- **GUI и Raw режимы** — удобная форма с полями или ввод аргументов вручную
-- **Управление сервером по SSH** — установка, запуск, остановка и мониторинг серверной части прямо из приложения (пароль или SSH-ключ)
-- **Капча** — автоматическое обнаружение и решение
-- **Watchdog** — автоматический перезапуск при обрыве (до 8 попыток, экспоненциальный backoff)
-- **Смена сети** — детектирование переключения Wi-Fi/Mobile и автоматическое переподключение
-- **Кастомное ядро** — возможность загрузить свой бинарник вместо встроенного
-- **Шифрование секретов** — SSH-пароли и ключи хранятся в EncryptedSharedPreferences (AES-256-GCM, Android Keystore)
-- **TOFU** — верификация SSH-хостов по отпечатку (Trust On First Use)
-- **Broadcast API** — управление прокси через intent (`START_PROXY` / `STOP_PROXY`) для автоматизации
+| Категория | Что умеет |
+|---|---|
+| Профили | Несколько именованных конфигов, быстрое переключение |
+| Транспорты | TCP, UDP, VLESS (+ опциональный `vless-bond`) |
+| Wrap | Обёртка трафика общим 64-hex ключом |
+| Управление сервером | Установка, запуск/остановка, генерация wrap-ключа, логи по SSH прямо из приложения |
+| Автоустановка | Бинарник на VPS разворачивается из приложения одним нажатием |
+| Автообновление | Проверка новых релизов и установка APK без ручного скачивания |
+| Watchdog | Автопереподключение при обрыве и смене Wi-Fi / Mobile |
+| Шифрование секретов | Пароли, ключи и wrap-key в EncryptedSharedPreferences (Android Keystore) |
+| Broadcast API | `START_PROXY` / `STOP_PROXY` для автоматизации |
+| Кастомное ядро | Подмена встроенного `libvkturn.so` |
 
-## Скриншоты
-
-<p float="left">
-  <img src="docs/screenshots/1.jpg" width="250" />
-  <img src="docs/screenshots/2.jpg" width="250" />
-</p>
+---
 
 ## Требования
 
-- Android 6.0+ (API 23)
-- ARM64-устройство (arm64-v8a)
-- VPS с установленным WireGuard или Hysteria
-- Ссылка на звонок
+- Android **6.0+** (API 23)
+- ARM64 (`arm64-v8a`)
+- VPS с поднятым WireGuard или Hysteria
+- Ссылка на звонок VK
 
-## Быстрый старт
+---
 
-### 1. Серверная часть
+## Как это работает в связке с VPN
 
-Установите и запустите серверную часть на VPS:
+> **FreeTurn — это не VPN.** Туннель он не поднимает.
+
+FreeTurn — транспортный слой: принимает UDP-пакеты на `127.0.0.1:9000` и пробрасывает их через TURN до вашего VPS. Сам трафик создаёт **WireGuard / AmneziaWG**, у которого `Endpoint` указан на этот локальный порт.
+
+**Без WireGuard-клиента, направленного на `127.0.0.1:9000`, трафика не будет.**
+
+---
+
+## Настройка по шагам
+
+> Пример с **AmneziaVPN**. Для чистого WireGuard всё аналогично.
+
+### 1. Установите APK
+
+Берите свежий релиз из [Releases](../../releases).
+
+### 2. Поднимите серверную часть
+
+При первом запуске **онбординг сам предложит** ввести SSH-данные VPS и развернуть сервер. Позже это всегда доступно на экране **Сервер**:
+
+```
+Сервер → SSH-данные → [Установить] → [Запустить]
+```
+
+Бинарник загрузится на VPS и запустится автоматически.
+
+<details>
+<summary>Ручная установка (если SSH-менеджером не пользуетесь)</summary>
 
 ```bash
-# Скачать бинарник
 wget https://github.com/cacggghp/vk-turn-proxy/releases/latest/download/server-linux-amd64
-
-# Запустить
 chmod +x server-linux-amd64
 nohup ./server-linux-amd64 -listen 0.0.0.0:56000 -connect 127.0.0.1:<порт_wg> > server.log 2>&1 &
 ```
 
-Или используйте встроенный SSH-менеджер в приложении — он скачает, установит и запустит серверную часть за вас.
+</details>
 
-### 2. Android-клиент
+### 3. Согласуйте порты сервера
 
-1. Установите APK из [Releases](../../releases)
-2. Пройдите онбординг или пропустите его
-3. Заполните настройки:
-   - **Адрес сервера** — IP:порт вашего VPS (например `1.2.3.4:56000`)
-   - **Ссылка** — ссылка на звонок
-   - **Локальный адрес** — по умолчанию `127.0.0.1:9000`
-4. Нажмите кнопку запуска. При успехе в логах появится `Established DTLS connection!`
+На экране **Сервер**:
 
-## Стек
+| Поле | Значение |
+|---|---|
+| **Listen-порт** | `56000` по умолчанию или любой свободный. **Должен совпадать** с полем *Адрес vk-turn-proxy сервера* на экране **Клиент**. |
+| **Адрес TURN-клиента** (`-connect`) | `127.0.0.1:<порт_WireGuard/AmneziaWG>` на VPS. |
+
+### 4. Подготовьте конфиг WireGuard / AmneziaWG
+
+1. В AmneziaVPN добавьте нового пользователя в формате **оригинального WireGuard / AmneziaWG**.
+2. Скачайте `.conf` на устройство.
+3. Откройте в текстовом редакторе и замените:
+
+   ```diff
+   - Endpoint = your.vps.ip:51820
+   + Endpoint = 127.0.0.1:9000
+   ```
+
+4. Сохраните и **импортируйте обратно** в клиент AmneziaWG.
+
+### 5. Исключите FreeTurn из VPN
+
+В AmneziaWG включите раздельное туннелирование:
+
+> **Режим:** «Приложения из списка не должны работать через VPN»
+> **Список:** добавьте **FreeTurn**.
+
+Без этого пакеты самого FreeTurn зациклятся в туннель.
+
+### 6. Настройте клиент FreeTurn
+
+На экране **Клиент**:
+
+| Поле | Значение |
+|---|---|
+| **Ссылка** | URL VK-звонка |
+| **Адрес vk-turn-proxy сервера** | `IP_VPS:<listen-порт сервера>` |
+| **Локальный адрес** | `127.0.0.1:9000` (тот же, что `Endpoint` в `.conf`) |
+
+### 7. Запустите прокси
+
+На главном экране FreeTurn нажмите **Запуск**.
+
+### 8. Включите VPN
+
+В AmneziaWG включите подключение. Готово — трафик идёт через TURN.
+
+---
+
+## Broadcast API
+
+Управление прокси через `adb` или Tasker:
+
+```bash
+# запуск
+adb shell am broadcast -a com.freeturn.app.START_PROXY -n com.freeturn.app/.ProxyReceiver
+
+# остановка
+adb shell am broadcast -a com.freeturn.app.STOP_PROXY  -n com.freeturn.app/.ProxyReceiver
+```
+
+---
+
+## Под капотом
+
+<details>
+<summary>Стек технологий</summary>
 
 - **Kotlin** + **Jetpack Compose** + **Material 3**
 - **Coroutines / StateFlow** — реактивная архитектура
+- **DataStore** — настройки и профили
+- **EncryptedSharedPreferences** + **Android Keystore** — секреты
 - **JSch** — SSH-клиент
-- **EncryptedSharedPreferences** — шифрование секретов
-- **DataStore** — хранение настроек
-- Нативный бинарник на **Go** — `libvkturn.so` (arm64-v8a)
+- Нативное ядро на **Go** — `libvkturn.so` (arm64-v8a)
+
+</details>
+
+---
 
 ## Благодарности
 
-- [alexmac6574/vk-turn-proxy](https://github.com/alexmac6574/vk-turn-proxy) — [@alexmac6574](https://github.com/alexmac6574), форк ядро vk-turn-proxy
+- [Moroka8/vk-turn-proxy](https://github.com/Moroka8/vk-turn-proxy) — [@Moroka8](https://github.com/Moroka8), форк ядра vk-turn-proxy
+- [alexmac6574/vk-turn-proxy](https://github.com/alexmac6574/vk-turn-proxy) — [@alexmac6574](https://github.com/alexmac6574), форк ядра vk-turn-proxy
 - [cacggghp/vk-turn-proxy](https://github.com/cacggghp/vk-turn-proxy) — [@cacggghp](https://github.com/cacggghp), оригинальное vk-turn-proxy
 - [MYSOREZ/vk-turn-proxy-android](https://github.com/MYSOREZ/vk-turn-proxy-android) — [@MYSOREZ](https://github.com/MYSOREZ), оригинальный Android-клиент
 
+---
+
 ## Лицензия
 
-[GPL-3.0](LICENSE)
+[**GPL-3.0**](LICENSE)
