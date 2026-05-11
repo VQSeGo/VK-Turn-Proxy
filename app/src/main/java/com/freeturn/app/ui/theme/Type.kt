@@ -6,10 +6,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-// Веса display/title намеренно тяжелее MD3-дефолта (Bold/SemiBold вместо Regular):
-// в проксе верх экрана — главный визуальный якорь (статус, заголовки секций), и
-// Regular на 22sp/36sp смотрится вяло рядом с акцентным контейнером ProxyToggleButton.
-// Остальные роли (body*, label*) совпадают со спекой и подтягиваются дефолтом.
+// Веса displaySmall/titleLarge намеренно тяжелее MD3-дефолта (Bold/SemiBold):
+// верх экрана — главный визуальный якорь (статус, заголовки секций), Regular на
+// 22sp/36sp смотрится вяло рядом с акцентным ProxyToggleButton. titleMedium
+// (16sp) оставлен на дефолте — он широко используется в списках/карточках/
+// section-headerах, и глобальный SemiBold даёт визуальный шум.
 val Typography = Typography(
     displaySmall = TextStyle(
         fontFamily = FontFamily.Default,
@@ -24,12 +25,5 @@ val Typography = Typography(
         fontSize = 22.sp,
         lineHeight = 28.sp,
         letterSpacing = 0.sp
-    ),
-    titleMedium = TextStyle(
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 16.sp,
-        lineHeight = 24.sp,
-        letterSpacing = 0.15.sp
     )
 )
