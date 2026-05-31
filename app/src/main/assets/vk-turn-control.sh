@@ -21,7 +21,7 @@ ENVFILE="$PREFIX/run.env"
 LAUNCHER="$PREFIX/launch.sh"
 UNIT_PATH="/etc/systemd/system/vk-turn-proxy.service"
 UNIT_NAME="vk-turn-proxy.service"
-BASE_URL="https://github.com/samosvalishe/vk-turn-proxy/releases/latest/download"
+BASE_URL="https://github.com/VQSeGo/VK-Turn-Proxy/releases/latest/download"
 
 log()  { echo "LOG: $*"; }
 emit() { echo "$1=$2"; }

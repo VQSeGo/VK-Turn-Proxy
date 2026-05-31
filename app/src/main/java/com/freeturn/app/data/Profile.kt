@@ -60,6 +60,7 @@ internal object ProfileJson {
         put("client", JSONObject().apply {
             put("serverAddress", p.client.serverAddress)
             put("vkLink", p.client.vkLink)
+            put("systemVkLink", p.client.systemVkLink)
             put("threads", p.client.threads)
             put("streamsPerCred", p.client.streamsPerCred)
             put("useUdp", p.client.useUdp)
@@ -106,6 +107,7 @@ internal object ProfileJson {
             client = ClientConfig(
                 serverAddress = cliO.optString("serverAddress"),
                 vkLink = cliO.optString("vkLink"),
+                systemVkLink = cliO.optString("systemVkLink"),
                 threads = cliO.optInt("threads", 4),
                 streamsPerCred = cliO.optInt("streamsPerCred", 10),
                 useUdp = cliO.optBoolean("useUdp", true),

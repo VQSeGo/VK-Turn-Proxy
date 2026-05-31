@@ -27,6 +27,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -525,6 +527,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         withTimeoutOrNull(2_000) {
             ProxyServiceState.isRunning.first { !it }
         }
+        if (!checkAndRefreshSubscription()) {
+            proxyManager.setErrorWithAutoReset("Подписка закончилась")
+            return
+        }
         proxyManager.startProxy(clientConfig.value)
     }
 
@@ -566,7 +572,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Local proxy
     fun startProxy() {
         viewModelScope.launch {
-            proxyManager.startProxy(clientConfig.value)
+            val expiresAtSeconds = prefs.getSubscriptionExpiresAt()
+            val currentTimeSeconds = System.currentTimeMillis() / 1000L
+            val isExpired = expiresAtSeconds != 0L && currentTimeSeconds >= expiresAtSeconds
+            val elapsedSeconds = if (isExpired) currentTimeSeconds - expiresAtSeconds else 0L
+            val within12Hours = elapsedSeconds < 12 * 3600
+
+            if (!isExpired || within12Hours) {
+                if (!checkAndRefreshSubscription()) {
+                    proxyManager.setErrorWithAutoReset("Подписка закончилась")
+                    return@launch
+                }
+                proxyManager.startProxy(clientConfig.value)
+            } else {
+                // Подписка просрочена более чем на 12 часов: запускаем только ядро без VPN
+                proxyManager.startProxy(clientConfig.value, coreOnly = true)
+                
+                // Даем ядру немного времени для бинда SOCKS5 порта
+                kotlinx.coroutines.delay(800)
+                
+                // Делаем проверочный запрос авторизации через запущенный SOCKS5 прокси ядра
+                val renewed = checkAndRefreshSubscription()
+                if (renewed) {
+                    // Подписка обновлена (пользователь продлил её в боте)! Запускаем WireGuard туннель
+                    val context = getApplication<Application>()
+                    val intent = Intent(context, ProxyService::class.java).apply {
+                        action = ProxyService.ACTION_START_TUNNEL
+                    }
+                    context.startService(intent)
+                } else {
+                    // Подписка всё ещё просрочена. Гасим прокси и показываем ошибку
+                    proxyManager.stopProxy()
+                    proxyManager.setErrorWithAutoReset("Подписка закончилась")
+                }
+            }
         }
     }
 
@@ -632,4 +671,303 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             context.startActivity(intent)
         }
     }
+
+    fun getAuthToken(): String = prefs.getAuthToken()
+    fun saveAuthToken(token: String) {
+        prefs.saveAuthToken(token)
+    }
+
+    fun getConfigUrl(): String = prefs.getConfigUrl()
+    fun saveConfigUrl(url: String) {
+        prefs.saveConfigUrl(url)
+    }
+
+    fun getDecryptionKey(): String = prefs.getDecryptionKey()
+    fun saveDecryptionKey(key: String) {
+        prefs.saveDecryptionKey(key)
+    }
+
+    fun getSubscriptionExpiresAt(): Long = prefs.getSubscriptionExpiresAt()
+    fun saveSubscriptionExpiresAt(timestamp: Long) {
+        prefs.saveSubscriptionExpiresAt(timestamp)
+    }
+
+    fun getWgConfig(): String = prefs.getWgConfig()
+    fun saveWgConfig(jsonStr: String) {
+        prefs.saveWgConfig(jsonStr)
+    }
+
+    suspend fun checkAndRefreshSubscription(): Boolean {
+        val token = getAuthToken()
+        if (token.isEmpty()) {
+            return true
+        }
+
+        val expiresAtSeconds = prefs.getSubscriptionExpiresAt()
+        val currentTimeSeconds = System.currentTimeMillis() / 1000L
+
+        if (expiresAtSeconds == 0L) {
+            // Never authenticated or fresh start, let's allow starting but do a silent refresh
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    fetchAndDecryptConfig()
+                } catch (e: Exception) {}
+            }
+            return true
+        }
+
+        val isExpired = currentTimeSeconds >= expiresAtSeconds
+
+        if (!isExpired) {
+            // 1. Subscription active: allow start immediately, refresh in background
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    fetchAndDecryptConfig()
+                } catch (e: Exception) {}
+            }
+            return true
+        } else {
+            // Subscription expired
+            val elapsedSeconds = currentTimeSeconds - expiresAtSeconds
+            val within12Hours = elapsedSeconds < 12 * 3600
+
+            if (within12Hours) {
+                // 2. Expired < 12h: allow start immediately so they can reach auth server, refresh in background
+                viewModelScope.launch(Dispatchers.IO) {
+                    try {
+                        fetchAndDecryptConfig()
+                    } catch (e: Exception) {}
+                }
+                return true
+            } else {
+                // 3. Expired >= 12h: block start, attempt a blocking refresh first
+                val result = fetchAndDecryptConfig()
+                if (result.isSuccess) {
+                    val newExpiresAtSeconds = prefs.getSubscriptionExpiresAt()
+                    val newCurrentTimeSeconds = System.currentTimeMillis() / 1000L
+                    return newCurrentTimeSeconds < newExpiresAtSeconds
+                } else {
+                    return false
+                }
+            }
+        }
+    }
+
+    suspend fun fetchAndDecryptConfig(customToken: String? = null): Result<Boolean> {
+        return withContext(Dispatchers.IO) {
+            val token = customToken ?: getAuthToken()
+            if (token.isEmpty()) {
+                return@withContext Result.success<Boolean>(true)
+            }
+
+            var configUrl = ""
+            var decryptionKey = ""
+            var authException: Throwable? = null
+
+            // 1. Try to perform token authorization to get fresh URL and key
+            val authResult = performTokenAuth(token)
+            if (authResult.isSuccess) {
+                val response = authResult.getOrThrow()
+                configUrl = response.configUrl
+                decryptionKey = response.decryptionKey
+                saveConfigUrl(configUrl)
+                saveDecryptionKey(decryptionKey)
+                saveSubscriptionExpiresAt(response.endsAt)
+            } else {
+                authException = authResult.exceptionOrNull()
+                // Auth failed (network down / server down).
+                // Try to use previously saved config_url and decryption_key as fallback!
+                configUrl = getConfigUrl()
+                decryptionKey = getDecryptionKey()
+            }
+
+            if (configUrl.isEmpty() || decryptionKey.isEmpty()) {
+                val errMsg = authException?.message ?: "Сервер авторизации недоступен."
+                return@withContext Result.failure<Boolean>(Exception("Ошибка авторизации: $errMsg"))
+            }
+
+            // 2. Fetch the encrypted config payload
+            try {
+                val url = java.net.URL(configUrl)
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 10000
+                conn.readTimeout = 10000
+                conn.connect()
+
+                if (conn.responseCode == 200) {
+                    val encryptedBytes = conn.inputStream.use { it.readBytes() }
+
+                    // 3. Decrypt payload
+                    val decryptedJson = decryptConfigBytes(encryptedBytes, decryptionKey)
+
+                    // 4. Parse JSON config and save settings
+                    val json = org.json.JSONObject(decryptedJson)
+
+                    // Relay options
+                    val relay = json.getJSONObject("relay")
+                    val serverAddress = relay.getString("server_address")
+                    val localPort = "127.0.0.1:" + relay.getString("local_port")
+                    val threads = relay.getInt("threads")
+                    val streamsPerCred = relay.getInt("streams_per_cred")
+
+                    // VK Link
+                    val vkLink = json.getString("vk_call_link")
+
+                    // App settings
+                    val appSettings = json.optJSONObject("app_settings")
+                    val materialU = appSettings?.optBoolean("material_u", true) ?: true
+                    val alternativeTurnEnabled = appSettings?.optBoolean("alternative_turn_enabled", false) ?: false
+                    val alternativeTurnAddress = appSettings?.optString("alternative_turn_address", "") ?: ""
+                    val dnsResolverMode = appSettings?.optString("dns_resolver_mode", "auto") ?: "auto"
+                    val useCarrierDns = appSettings?.optBoolean("use_carrier_dns", false) ?: false
+                    val forcePort443 = appSettings?.optBoolean("force_port_443", false) ?: false
+                    val syncServerSwitches = appSettings?.optBoolean("sync_server_switches", true) ?: true
+
+                    // Logging
+                    val logging = json.optJSONObject("logging")
+                    val debugMode = logging?.optBoolean("debug", true) ?: true
+
+                    // WireGuard
+                    val wireguard = json.optJSONObject("wireguard")
+                    if (wireguard != null) {
+                        saveWgConfig(wireguard.toString())
+                    }
+
+                    // Save to ClientConfig
+                    val current = clientConfig.value
+                    val updatedConfig = ClientConfig(
+                        serverAddress = serverAddress,
+                        vkLink = current.vkLink,
+                        systemVkLink = vkLink,
+                        threads = threads,
+                        streamsPerCred = streamsPerCred,
+                        localPort = localPort,
+                        debugMode = debugMode,
+                        useCarrierDns = useCarrierDns,
+                        dnsMode = dnsResolverMode,
+                        forcePort443 = forcePort443,
+                        syncServerSwitches = syncServerSwitches,
+                        magicSwitch = alternativeTurnEnabled,
+                        magicTurn = alternativeTurnAddress,
+                        vlessMode = relay.optBoolean("vless", current.vlessMode),
+                        useUdp = relay.optBoolean("udp", current.useUdp),
+                        manualCaptcha = appSettings?.optBoolean("manual_captcha", current.manualCaptcha) ?: current.manualCaptcha,
+                        isRawMode = current.isRawMode,
+                        rawCommand = current.rawCommand
+                    )
+
+                    saveClientConfig(updatedConfig)
+
+                    // Save Dynamic Theme preference
+                    prefs.setDynamicTheme(materialU)
+
+                    Result.success<Boolean>(true)
+                } else {
+                    if (authException != null) {
+                        Result.failure<Boolean>(Exception("Ошибка авторизации: ${authException.message}"))
+                    } else {
+                        Result.failure<Boolean>(Exception("Ошибка скачивания конфигурации: ${conn.responseCode}"))
+                    }
+                }
+            } catch (e: Exception) {
+                if (authException != null) {
+                    Result.failure<Boolean>(Exception("Ошибка авторизации: ${authException.message}"))
+                } else {
+                    Result.failure<Boolean>(e)
+                }
+            }
+        }
+    }
+
+    private fun decryptConfigBytes(encryptedBytes: ByteArray, keyHex: String): String {
+        if (encryptedBytes.size < 28) {
+            throw Exception("Неверный размер бинарного файла конфигурации.")
+        }
+        val iv = encryptedBytes.sliceArray(0 until 12)
+        val tag = encryptedBytes.sliceArray(12 until 28)
+        val rawCiphertext = encryptedBytes.sliceArray(28 until encryptedBytes.size)
+        val ciphertextWithTag = rawCiphertext + tag
+
+        val keyBytes = hexToBytes(keyHex)
+        val secretKey = javax.crypto.spec.SecretKeySpec(keyBytes, "AES")
+        val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+        val spec = javax.crypto.spec.GCMParameterSpec(128, iv)
+        cipher.init(javax.crypto.Cipher.DECRYPT_MODE, secretKey, spec)
+
+        val decryptedBytes = cipher.doFinal(ciphertextWithTag)
+        return String(decryptedBytes, Charsets.UTF_8)
+    }
+
+    private fun hexToBytes(hex: String): ByteArray {
+        val len = hex.length
+        val data = ByteArray(len / 2)
+        var i = 0
+        while (i < len) {
+            data[i / 2] = ((Character.digit(hex[i], 16) shl 4) + Character.digit(hex[i + 1], 16)).toByte()
+            i += 2
+        }
+        return data
+    }
+
+    suspend fun performTokenAuth(token: String): Result<AuthResponse> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val url = java.net.URL("https://tvaldsforge.online/bot/turnproxy/auth?token=$token")
+                
+                // Проверяем, запущен ли прокси и есть ли активный системный VPN
+                val isRunning = ProxyServiceState.isRunning.value
+                val cm = getApplication<Application>().getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+                val vpnNetwork = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                    cm.allNetworks.firstOrNull { network ->
+                        val caps = cm.getNetworkCapabilities(network)
+                        caps?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) ?: false
+                    }
+                } else {
+                    null
+                }
+
+                val conn = when {
+                    vpnNetwork != null -> {
+                        // Роутим запрос авторизации напрямую через активное соединение VPN
+                        vpnNetwork.openConnection(url) as java.net.HttpURLConnection
+                    }
+                    isRunning -> {
+                        try {
+                            val currentCfg = prefs.clientConfigFlow.first()
+                            val port = currentCfg.localPort.substringAfterLast(":").toIntOrNull() ?: 9000
+                            val proxy = java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", port))
+                            url.openConnection(proxy) as java.net.HttpURLConnection
+                        } catch (e: Exception) {
+                            url.openConnection() as java.net.HttpURLConnection
+                        }
+                    }
+                    else -> {
+                        url.openConnection() as java.net.HttpURLConnection
+                    }
+                }
+
+                conn.requestMethod = "GET"
+                conn.connectTimeout = 10000
+                conn.readTimeout = 10000
+                conn.connect()
+                
+                if (conn.responseCode == 200) {
+                    val jsonStr = conn.inputStream.bufferedReader().use { it.readText() }
+                    val json = org.json.JSONObject(jsonStr)
+                    val configUrl = json.getString("config_url")
+                    val decryptionKey = json.getString("decryption_key")
+                    val endsAt = json.optLong("ends_at", 0L)
+                    Result.success(AuthResponse(configUrl, decryptionKey, endsAt))
+                } else if (conn.responseCode == 403) {
+                    Result.failure(Exception("Доступ отклонен: неверный токен или неактивная подписка"))
+                } else {
+                    Result.failure(Exception("Ошибка сервера: ${conn.responseCode}"))
+                }
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+    }
 }
+
+data class AuthResponse(val configUrl: String, val decryptionKey: String, val endsAt: Long)

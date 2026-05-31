@@ -9,10 +9,10 @@ android {
 
     defaultConfig {
         applicationId = "com.freeturn.app"
-        minSdk = 23
+        minSdk = 24
         targetSdk = 36
         versionCode = 22
-        versionName = "2.4.0"
+        versionName = "1.0.0-beta-01"
     }
 
     packaging {
@@ -39,15 +39,15 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
     compileSdkMinor = 1
 }
 
 kotlin {
     compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 
@@ -72,6 +72,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material3.adaptive.nav.suite)
+    implementation(libs.wireguard.android)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

@@ -40,6 +40,7 @@ object DnsMode {
 data class ClientConfig(
     val serverAddress: String = "",
     val vkLink: String = "",
+    val systemVkLink: String = "",
     val threads: Int = 4,
     /** Соответствует флагу `-streams-per-cred` ядра. Дефолт ядра = 10. */
     val streamsPerCred: Int = 10,
@@ -81,6 +82,7 @@ class AppPreferences(context: Context) {
         val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
         val CLIENT_SERVER_ADDR = stringPreferencesKey("client_server_addr")
         val CLIENT_VK_LINK = stringPreferencesKey("client_vk_link")
+        val CLIENT_SYSTEM_VK_LINK = stringPreferencesKey("client_system_vk_link")
         // Устаревший ключ из мультиссылочной фичи — используется для очистки.
         private val CLIENT_VK_LINKS_LEGACY = stringPreferencesKey("client_vk_links")
         val CLIENT_THREADS = intPreferencesKey("client_threads")
@@ -163,6 +165,7 @@ class AppPreferences(context: Context) {
             ClientConfig(
                 serverAddress = prefs[CLIENT_SERVER_ADDR] ?: "",
                 vkLink = prefs[CLIENT_VK_LINK] ?: "",
+                systemVkLink = prefs[CLIENT_SYSTEM_VK_LINK] ?: "",
                 threads = prefs[CLIENT_THREADS] ?: 4,
                 streamsPerCred = prefs[CLIENT_STREAMS_PER_CRED] ?: 10,
                 useUdp = prefs[CLIENT_UDP] ?: true,
@@ -285,6 +288,7 @@ class AppPreferences(context: Context) {
         context.dataStore.edit { prefs ->
             prefs[CLIENT_SERVER_ADDR] = config.serverAddress
             prefs[CLIENT_VK_LINK] = config.vkLink
+            prefs[CLIENT_SYSTEM_VK_LINK] = config.systemVkLink
             prefs.remove(CLIENT_VK_LINKS_LEGACY)
             prefs[CLIENT_THREADS] = config.threads
             prefs[CLIENT_STREAMS_PER_CRED] = config.streamsPerCred
@@ -350,5 +354,30 @@ class AppPreferences(context: Context) {
             // Чистим следы старого кастомного ядра, если оставались.
             File(context.filesDir, "custom_vkturn").delete()
         }
+    }
+
+    fun getAuthToken(): String = encryptedPrefs.getString("auth_token", "") ?: ""
+    fun saveAuthToken(token: String) {
+        encryptedPrefs.edit { putString("auth_token", token) }
+    }
+
+    fun getConfigUrl(): String = encryptedPrefs.getString("config_url", "") ?: ""
+    fun saveConfigUrl(url: String) {
+        encryptedPrefs.edit { putString("config_url", url) }
+    }
+
+    fun getDecryptionKey(): String = encryptedPrefs.getString("decryption_key", "") ?: ""
+    fun saveDecryptionKey(key: String) {
+        encryptedPrefs.edit { putString("decryption_key", key) }
+    }
+
+    fun getSubscriptionExpiresAt(): Long = encryptedPrefs.getLong("sub_expires_at", 0L)
+    fun saveSubscriptionExpiresAt(timestamp: Long) {
+        encryptedPrefs.edit { putLong("sub_expires_at", timestamp) }
+    }
+
+    fun getWgConfig(): String = encryptedPrefs.getString("wg_config", "") ?: ""
+    fun saveWgConfig(jsonStr: String) {
+        encryptedPrefs.edit { putString("wg_config", jsonStr) }
     }
 }

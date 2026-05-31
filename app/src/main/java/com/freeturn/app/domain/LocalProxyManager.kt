@@ -29,6 +29,7 @@ class LocalProxyManager(private val context: Context) {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var resetJob: kotlinx.coroutines.Job? = null
+    private var lastStartAttemptTime = 0L
 
     suspend fun observeProxyLifecycle() {
         ProxyServiceState.proxyFailed.collect {
@@ -65,7 +66,12 @@ class LocalProxyManager(private val context: Context) {
                     current is ProxyState.Connecting ||
                     current is ProxyState.Starting ||
                     current is ProxyState.CaptchaRequired) {
-                    _proxyState.value = ProxyState.Idle
+                    val sr = ProxyServiceState.startupResult.value
+                    if (sr is StartupResult.Failed) {
+                        setErrorWithAutoReset(sr.message)
+                    } else {
+                        _proxyState.value = ProxyState.Idle
+                    }
                 }
             }
         }
@@ -107,11 +113,30 @@ class LocalProxyManager(private val context: Context) {
         }
     }
 
-    suspend fun startProxy(cfg: ClientConfig) {
-        if (ProxyServiceState.isRunning.value) return
-        if (_proxyState.value is ProxyState.Error) _proxyState.value = ProxyState.Idle
+    suspend fun startProxy(cfg: ClientConfig, coreOnly: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (now - lastStartAttemptTime < 2000L) {
+            return
+        }
 
-        if (!cfg.isRawMode && (cfg.serverAddress.isBlank() || cfg.vkLink.isBlank())) {
+        val current = _proxyState.value
+        if (ProxyServiceState.isRunning.value ||
+            current is ProxyState.Starting ||
+            current is ProxyState.Connecting ||
+            current is ProxyState.Running ||
+            current is ProxyState.CaptchaRequired
+        ) {
+            return
+        }
+
+        lastStartAttemptTime = now
+
+        if (current is ProxyState.Error) {
+            _proxyState.value = ProxyState.Idle
+        }
+
+        val activeVkLink = (if (cfg.vkLink.isNotBlank()) cfg.vkLink else cfg.systemVkLink).trim()
+        if (!cfg.isRawMode && (cfg.serverAddress.isBlank() || activeVkLink.isBlank())) {
             setErrorWithAutoReset("Не заполнены настройки клиента")
             return
         }
@@ -126,22 +151,25 @@ class LocalProxyManager(private val context: Context) {
         ProxyServiceState.setStartupResult(null)
         ProxyServiceState.setConnectionStats(ConnectionStats.IDLE)
         ProxyServiceState.clearConnectedSince()
-        val intent = Intent(context, ProxyService::class.java)
+        val intent = Intent(context, ProxyService::class.java).apply {
+            if (coreOnly) {
+                putExtra(ProxyService.EXTRA_CORE_ONLY, true)
+            }
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent)
         } else {
             context.startService(intent)
         }
 
-        // Умное ожидание стартапа. Watchdog внутри сервиса делает до MAX_RESTARTS
-        // попыток с backoff до 30с — фиксированный таймаут (20с) обрывал UI ещё
-        // на первой-второй ретрай-итерации. Теперь ждём пока:
-        //   • сервис не отдаст StartupResult (Success/Failed), ИЛИ
-        //   • сервис не остановится сам (watchdog исчерпал лимит → isRunning=false).
-        // Верхняя граница в 5 минут — страховка от подвисшего сервиса.
         val result = withTimeoutOrNull(5 * 60_000L) {
-            // Дождаться, что сервис фактически поднялся (onStartCommand).
-            ProxyServiceState.isRunning.first { it }
+            // Дождаться, что сервис фактически начал запуск (onStartCommand вошел в работу).
+            combine(
+                ProxyServiceState.isRunning,
+                ProxyServiceState.startupResult
+            ) { running, sr -> running || sr != null }
+                .first { it }
+
             combine(
                 ProxyServiceState.startupResult,
                 ProxyServiceState.isRunning

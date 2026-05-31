@@ -37,6 +37,16 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+import com.wireguard.android.backend.GoBackend
+import com.wireguard.android.backend.Tunnel
+import com.wireguard.config.Config
+import com.wireguard.config.Interface
+import com.wireguard.config.Peer
+import com.wireguard.crypto.Key
+import com.wireguard.config.InetNetwork
+import com.wireguard.config.InetEndpoint
+import java.net.InetAddress
+
 sealed class StartupResult {
     data object Success : StartupResult()
     data class Failed(val message: String) : StartupResult()
@@ -46,6 +56,8 @@ class ProxyService : Service() {
 
     companion object {
         const val MAX_RESTARTS = 8
+        const val EXTRA_CORE_ONLY = "extra_core_only"
+        const val ACTION_START_TUNNEL = "com.freeturn.app.ACTION_START_TUNNEL"
         private const val CHANNEL_PROXY = "ProxyChannel"
         private const val CHANNEL_CAPTCHA = "CaptchaChannel"
         private const val NOTIF_ID_FG = 1
@@ -76,6 +88,13 @@ class ProxyService : Service() {
     private var openAppIntent: PendingIntent? = null
 
     private val process = AtomicReference<Process?>(null)
+    private var wgBackend: GoBackend? = null
+    private val turnTunnel = object : Tunnel {
+        override fun getName(): String = "TurnVpn"
+        override fun onStateChange(state: Tunnel.State) {
+            ProxyServiceState.addLog("=== WireGuard состояние: $state ===")
+        }
+    }
     private val userStopped = AtomicBoolean(false)
     private val sessionKillScheduled = AtomicBoolean(false)
 
@@ -85,6 +104,8 @@ class ProxyService : Service() {
     @Volatile private var networkDebounceJob: kotlinx.coroutines.Job? = null
     private val restartCount = AtomicInteger(0)
     @Volatile private var captchaNotificationActive = false
+    private var stoppedByWifi = false
+    private var coreOnlyMode = false
 
     private lateinit var prefs: AppPreferences
     private lateinit var serviceScope: CoroutineScope
@@ -133,6 +154,41 @@ class ProxyService : Service() {
             .build()
         startForeground(NOTIF_ID_FG, notification)
 
+        if (intent?.action == ACTION_START_TUNNEL) {
+            ProxyServiceState.addLog("Запрос на активацию WireGuard туннеля...")
+            coreOnlyMode = false
+            serviceScope.launch(Dispatchers.IO) { startWireGuardTunnel() }
+            return START_STICKY
+        }
+
+        coreOnlyMode = intent?.getBooleanExtra(EXTRA_CORE_ONLY, false) ?: false
+        if (coreOnlyMode) {
+            ProxyServiceState.addLog("Режим запуска: Только прокси-ядро (без VPN-туннеля)")
+        }
+
+        ProxyServiceState.setRunning(true)
+        userStopped.set(false)
+
+        // Блокировка запуска на Wi-Fi
+        val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+        val isWifi = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val activeNetwork = cm.activeNetwork
+            val capabilities = cm.getNetworkCapabilities(activeNetwork)
+            capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ?: false
+        } else {
+            @Suppress("DEPRECATION")
+            cm.activeNetworkInfo?.type == ConnectivityManager.TYPE_WIFI
+        }
+
+        if (isWifi) {
+            stoppedByWifi = true
+            ProxyServiceState.addLog("=== ОШИБКА: Запуск прокси по Wi-Fi заблокирован ===")
+            ProxyServiceState.setStartupResult(StartupResult.Failed("Запуск заблокирован: подключён Wi-Fi"))
+            ProxyServiceState.setRunning(false)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
         // Если процесс ядра ещё жив — это повторный onStartCommand (например,
         // sticky-рестарт). Не запускаем второй процесс, но требование о
         // startForeground выше уже выполнено.
@@ -141,9 +197,8 @@ class ProxyService : Service() {
             return START_STICKY
         }
 
-        ProxyServiceState.setRunning(true)
-        userStopped.set(false)
         restartCount.set(0)
+        ProxyServiceState.startNewSession(this)
 
         val powerManager = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "VkTurn::BgLock")
@@ -159,6 +214,8 @@ class ProxyService : Service() {
 
     private suspend fun startBinaryProcess() {
         if (userStopped.get()) return
+
+        fetchAndDecryptConfig()
 
         val cfg = prefs.clientConfigFlow.first()
         // Wrap-обфускация и VLESS bonding управляются на серверном экране, но
@@ -178,12 +235,12 @@ class ProxyService : Service() {
             cmdArgs.add(executable)
             cmdArgs.add("-peer"); cmdArgs.add(cfg.serverAddress)
 
-            cmdArgs.add(if (cfg.vkLink.contains("yandex")) "-yandex-link" else "-vk-link")
-            cmdArgs.add(cfg.vkLink)
+            val activeVkLink = (if (cfg.vkLink.isNotBlank()) cfg.vkLink else cfg.systemVkLink).trim()
+            cmdArgs.add(if (activeVkLink.contains("yandex")) "-yandex-link" else "-vk-link")
+            cmdArgs.add(activeVkLink)
             cmdArgs.add("-listen"); cmdArgs.add(cfg.localPort)
             if (cfg.threads > 0) { cmdArgs.add("-n"); cmdArgs.add(cfg.threads.toString()) }
-            // -streams-per-cred передаём только если пользователь поменял дефолт.
-            if (cfg.streamsPerCred > 0 && cfg.streamsPerCred != 10) {
+            if (cfg.streamsPerCred > 0) {
                 cmdArgs.add("-streams-per-cred"); cmdArgs.add(cfg.streamsPerCred.toString())
             }
             if (cfg.vlessMode) cmdArgs.add("-vless")
@@ -392,7 +449,12 @@ class ProxyService : Service() {
                             hasConnection -> {
                                 ProxyServiceState.setStartupResult(StartupResult.Success)
                                 ProxyServiceState.markConnectedIfAbsent(SystemClock.elapsedRealtime())
-                                updateNotification("Прокси активен")
+                                if (coreOnlyMode) {
+                                    updateNotification("Прокси активен (только ядро)")
+                                } else {
+                                    updateNotification("Прокси активен")
+                                    serviceScope.launch(Dispatchers.IO) { startWireGuardTunnel() }
+                                }
                                 startupEmitted = true
                             }
                         }
@@ -431,6 +493,7 @@ class ProxyService : Service() {
                 ProxyServiceState.addLog("КРИТИЧЕСКАЯ ОШИБКА: ${e.message}")
             }
         } finally {
+            stopWireGuardTunnel()
             ProxyServiceState.setCaptchaSession(null)
             cancelCaptchaNotification()
             // Процесс мёртв — активных соединений нет. При watchdog-рестарте
@@ -491,6 +554,22 @@ class ProxyService : Service() {
         val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
+                val capabilities = cm.getNetworkCapabilities(network)
+                if (capabilities != null && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                    return
+                }
+
+                // Авто-отключение при переходе на Wi-Fi
+                if (capabilities != null && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                    serviceScope.launch {
+                        stoppedByWifi = true
+                        ProxyServiceState.addLog("=== ОБНАРУЖЕН WI-FI — АВТО-ОТКЛЮЧЕНИЕ ===")
+                        ProxyServiceState.setStartupResult(StartupResult.Failed("Авто-отключение: подключён Wi-Fi"))
+                        stopSelf()
+                    }
+                    return
+                }
+
                 if (!networkInitialized) {
                     networkInitialized = true
                     return
@@ -506,6 +585,17 @@ class ProxyService : Service() {
                         restartCount.set(0)
                         val p = process.get()
                         p?.destroyCompat()
+                    }
+                }
+            }
+
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                    serviceScope.launch {
+                        stoppedByWifi = true
+                        ProxyServiceState.addLog("=== ОБНАРУЖЕН WI-FI — АВТО-ОТКЛЮЧЕНИЕ ===")
+                        ProxyServiceState.setStartupResult(StartupResult.Failed("Авто-отключение: подключён Wi-Fi"))
+                        stopSelf()
                     }
                 }
             }
@@ -593,6 +683,259 @@ class ProxyService : Service() {
         }
     }
 
+    private fun startWireGuardTunnel() {
+        try {
+            val wgJsonStr = prefs.getWgConfig()
+            if (wgJsonStr.isEmpty()) {
+                ProxyServiceState.addLog("Ошибка: Конфигурация WireGuard пуста.")
+                return
+            }
+            val wgJson = org.json.JSONObject(wgJsonStr)
+            val clientConfig = kotlinx.coroutines.runBlocking { prefs.clientConfigFlow.first() }
+            val relayLocalPort = clientConfig.localPort.substringAfterLast(":")
+
+            ProxyServiceState.addLog("Инициализация WireGuard туннеля...")
+
+            val configText = """
+                [Interface]
+                PrivateKey = ${wgJson.getString("private_key")}
+                Address = ${wgJson.getString("address")}
+                DNS = ${wgJson.optString("dns", "1.1.1.1")}
+                MTU = ${wgJson.optInt("mtu", 1280)}
+                ExcludedApplications = $packageName
+                
+                [Peer]
+                PublicKey = ${wgJson.getString("public_key")}
+                Endpoint = 127.0.0.1:$relayLocalPort
+                AllowedIPs = 0.0.0.0/0
+                PersistentKeepalive = ${wgJson.optInt("persistent_keepalive", 15)}
+            """.trimIndent()
+
+            val config = Config.parse(configText.byteInputStream())
+
+            if (wgBackend == null) {
+                wgBackend = GoBackend(this)
+            }
+
+            wgBackend?.setState(turnTunnel, Tunnel.State.UP, config)
+            ProxyServiceState.addLog("WireGuard туннель запущен.")
+        } catch (e: Exception) {
+            ProxyServiceState.addLog("Ошибка запуска WireGuard: ${e.message}")
+        }
+    }
+
+    private fun stopWireGuardTunnel() {
+        try {
+            if (wgBackend != null) {
+                ProxyServiceState.addLog("Остановка WireGuard туннеля...")
+                wgBackend?.setState(turnTunnel, Tunnel.State.DOWN, null)
+                ProxyServiceState.addLog("WireGuard туннель остановлен.")
+            }
+        } catch (e: Exception) {
+            ProxyServiceState.addLog("Ошибка остановки WireGuard: ${e.message}")
+        }
+    }
+
+    private suspend fun fetchAndDecryptConfig(): Boolean {
+        return withContext(Dispatchers.IO) {
+            val token = prefs.getAuthToken()
+            if (token.isEmpty()) {
+                return@withContext true
+            }
+
+            var configUrl = ""
+            var decryptionKey = ""
+            var authException: Throwable? = null
+
+            val authResult = performTokenAuth(token)
+            if (authResult.isSuccess) {
+                val response = authResult.getOrThrow()
+                configUrl = response.configUrl
+                decryptionKey = response.decryptionKey
+                prefs.saveConfigUrl(configUrl)
+                prefs.saveDecryptionKey(decryptionKey)
+                prefs.saveSubscriptionExpiresAt(response.endsAt)
+            } else {
+                authException = authResult.exceptionOrNull()
+                configUrl = prefs.getConfigUrl()
+                decryptionKey = prefs.getDecryptionKey()
+            }
+
+            if (configUrl.isEmpty() || decryptionKey.isEmpty()) {
+                ProxyServiceState.addLog("Ошибка авто-обновления: ${authException?.message ?: "Сервер недоступен"}")
+                return@withContext false
+            }
+
+            try {
+                val url = java.net.URL(configUrl)
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 10000
+                conn.readTimeout = 10000
+                conn.connect()
+
+                if (conn.responseCode == 200) {
+                    val encryptedBytes = conn.inputStream.use { it.readBytes() }
+
+                    val decryptedJson = decryptConfigBytes(encryptedBytes, decryptionKey)
+
+                    val json = org.json.JSONObject(decryptedJson)
+
+                    val relay = json.getJSONObject("relay")
+                    val serverAddress = relay.getString("server_address")
+                    val localPort = "127.0.0.1:" + relay.getString("local_port")
+                    val threads = relay.getInt("threads")
+                    val streamsPerCred = relay.getInt("streams_per_cred")
+
+                    val vkLink = json.getString("vk_call_link")
+
+                    val appSettings = json.optJSONObject("app_settings")
+                    val materialU = appSettings?.optBoolean("material_u", true) ?: true
+                    val alternativeTurnEnabled = appSettings?.optBoolean("alternative_turn_enabled", false) ?: false
+                    val alternativeTurnAddress = appSettings?.optString("alternative_turn_address", "") ?: ""
+                    val dnsResolverMode = appSettings?.optString("dns_resolver_mode", "auto") ?: "auto"
+                    val useCarrierDns = appSettings?.optBoolean("use_carrier_dns", false) ?: false
+                    val forcePort443 = appSettings?.optBoolean("force_port_443", false) ?: false
+                    val syncServerSwitches = appSettings?.optBoolean("sync_server_switches", true) ?: true
+
+                    val logging = json.optJSONObject("logging")
+                    val debugMode = logging?.optBoolean("debug", true) ?: true
+
+                    val wireguard = json.optJSONObject("wireguard")
+                    if (wireguard != null) {
+                        prefs.saveWgConfig(wireguard.toString())
+                    }
+
+                    val current = prefs.clientConfigFlow.first()
+                    val updatedConfig = com.freeturn.app.data.ClientConfig(
+                        serverAddress = serverAddress,
+                        vkLink = current.vkLink,
+                        systemVkLink = vkLink,
+                        threads = current.threads,
+                        streamsPerCred = current.streamsPerCred,
+                        localPort = localPort,
+                        debugMode = debugMode,
+                        useCarrierDns = useCarrierDns,
+                        dnsMode = dnsResolverMode,
+                        forcePort443 = forcePort443,
+                        syncServerSwitches = syncServerSwitches,
+                        magicSwitch = alternativeTurnEnabled,
+                        magicTurn = alternativeTurnAddress,
+                        vlessMode = relay.optBoolean("vless", current.vlessMode),
+                        useUdp = relay.optBoolean("udp", current.useUdp),
+                        manualCaptcha = appSettings?.optBoolean("manual_captcha", current.manualCaptcha) ?: current.manualCaptcha,
+                        isRawMode = current.isRawMode,
+                        rawCommand = current.rawCommand
+                    )
+
+                    prefs.saveClientConfig(updatedConfig)
+                    prefs.setDynamicTheme(materialU)
+                    ProxyServiceState.addLog("=== Конфигурация успешно обновлена ===")
+                    true
+                } else {
+                    ProxyServiceState.addLog("Ошибка скачивания конфига: ${conn.responseCode}")
+                    false
+                }
+            } catch (e: Exception) {
+                ProxyServiceState.addLog("Ошибка скачивания/дешифрования конфига: ${e.message}")
+                false
+            }
+        }
+    }
+
+    private fun decryptConfigBytes(encryptedBytes: ByteArray, keyHex: String): String {
+        if (encryptedBytes.size < 28) {
+            throw Exception("Неверный размер файла конфигурации.")
+        }
+        val iv = encryptedBytes.sliceArray(0 until 12)
+        val tag = encryptedBytes.sliceArray(12 until 28)
+        val rawCiphertext = encryptedBytes.sliceArray(28 until encryptedBytes.size)
+        val ciphertextWithTag = rawCiphertext + tag
+
+        val keyBytes = hexToBytes(keyHex)
+        val secretKey = javax.crypto.spec.SecretKeySpec(keyBytes, "AES")
+        val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+        val spec = javax.crypto.spec.GCMParameterSpec(128, iv)
+        cipher.init(javax.crypto.Cipher.DECRYPT_MODE, secretKey, spec)
+
+        val decryptedBytes = cipher.doFinal(ciphertextWithTag)
+        return String(decryptedBytes, Charsets.UTF_8)
+    }
+
+    private fun hexToBytes(hex: String): ByteArray {
+        val len = hex.length
+        val data = ByteArray(len / 2)
+        var i = 0
+        while (i < len) {
+            data[i / 2] = ((Character.digit(hex[i], 16) shl 4) + Character.digit(hex[i + 1], 16)).toByte()
+            i += 2
+        }
+        return data
+    }
+
+    private suspend fun performTokenAuth(token: String): Result<ServiceAuthResponse> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val url = java.net.URL("https://tvaldsforge.online/bot/turnproxy/auth?token=$token")
+                
+                // Проверяем, запущен ли прокси и есть ли активный системный VPN
+                val isRunning = ProxyServiceState.isRunning.value
+                val cm = getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                val vpnNetwork = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    cm.allNetworks.firstOrNull { network ->
+                        val caps = cm.getNetworkCapabilities(network)
+                        caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) ?: false
+                    }
+                } else {
+                    null
+                }
+
+                val conn = when {
+                    vpnNetwork != null -> {
+                        ProxyServiceState.addLog("Запрос авторизации: роутинг через интерфейс VPN")
+                        vpnNetwork.openConnection(url) as java.net.HttpURLConnection
+                    }
+                    isRunning -> {
+                        try {
+                            val cfg = prefs.clientConfigFlow.first()
+                            val port = cfg.localPort.substringAfterLast(":").toIntOrNull() ?: 9000
+                            ProxyServiceState.addLog("Запрос авторизации: роутинг через локальный SOCKS5 ($port)")
+                            val proxy = java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", port))
+                            url.openConnection(proxy) as java.net.HttpURLConnection
+                        } catch (e: Exception) {
+                            ProxyServiceState.addLog("Сбой SOCKS5: ${e.message}, прямой запрос...")
+                            url.openConnection() as java.net.HttpURLConnection
+                        }
+                    }
+                    else -> {
+                        url.openConnection() as java.net.HttpURLConnection
+                    }
+                }
+
+                conn.requestMethod = "GET"
+                conn.connectTimeout = 10000
+                conn.readTimeout = 10000
+                conn.connect()
+
+                if (conn.responseCode == 200) {
+                    val jsonStr = conn.inputStream.bufferedReader().use { it.readText() }
+                    val json = org.json.JSONObject(jsonStr)
+                    val configUrl = json.getString("config_url")
+                    val decryptionKey = json.getString("decryption_key")
+                    val endsAt = json.optLong("ends_at", 0L)
+                    Result.success(ServiceAuthResponse(configUrl, decryptionKey, endsAt))
+                } else if (conn.responseCode == 403) {
+                    Result.failure(Exception("Доступ отклонен: неверный токен"))
+                } else {
+                    Result.failure(Exception("Ошибка сервера: ${conn.responseCode}"))
+                }
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+    }
+
+    private data class ServiceAuthResponse(val configUrl: String, val decryptionKey: String, val endsAt: Long)
+
     override fun onDestroy() {
         super.onDestroy()
         userStopped.set(true)
@@ -602,7 +945,10 @@ class ProxyService : Service() {
         handler.removeCallbacksAndMessages(null)
         unregisterNetworkCallback()
         cancelCaptchaNotification()
-        ProxyServiceState.addLog("=== ОСТАНОВКА ИЗ ИНТЕРФЕЙСА ===")
+        if (!stoppedByWifi) {
+            ProxyServiceState.addLog("=== ОСТАНОВКА ИЗ ИНТЕРФЕЙСА ===")
+        }
+        stopWireGuardTunnel()
         process.get()?.destroyCompat()
         serviceScope.cancel()
         if (wakeLock?.isHeld == true) wakeLock?.release()

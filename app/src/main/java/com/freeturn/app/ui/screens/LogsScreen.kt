@@ -58,15 +58,14 @@ fun LogsScreen(viewModel: MainViewModel) {
                 actions = {
                     IconButton(
                         onClick = {
-                            val cm = context.getSystemService(ClipboardManager::class.java)
-                            cm.setPrimaryClip(ClipData.newPlainText("proxy_logs", logs.joinToString("\n")))
                             HapticUtil.perform(context, HapticUtil.Pattern.SUCCESS)
+                            com.freeturn.app.ProxyServiceState.exportLogs(context)
                         },
                         enabled = logs.isNotEmpty()
                     ) {
                         Icon(
-                            painterResource(R.drawable.content_copy_24px),
-                            contentDescription = stringResource(R.string.copy)
+                            painterResource(R.drawable.share_24px),
+                            contentDescription = "Экспортировать"
                         )
                     }
                     IconButton(

@@ -32,6 +32,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.font.FontWeight
 import com.freeturn.app.R
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
@@ -54,10 +56,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.VpnService
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
@@ -77,13 +81,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.freeturn.app.ui.HapticUtil
 import com.freeturn.app.ui.theme.extendedColorScheme
 import com.freeturn.app.viewmodel.MainViewModel
@@ -99,18 +106,28 @@ fun HomeScreen(
     onNavigateToSshSetup: () -> Unit
 ) {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
+    val clipboardManager = LocalClipboardManager.current
     val proxyState by viewModel.proxyState.collectAsStateWithLifecycle()
     val connectedSince by viewModel.connectedSince.collectAsStateWithLifecycle()
     val uptimeText = rememberProxyUptime(connectedSince)
     val sshState by viewModel.sshState.collectAsStateWithLifecycle()
     val sshConfig by viewModel.sshConfig.collectAsStateWithLifecycle()
     val clientConfig by viewModel.clientConfig.collectAsStateWithLifecycle()
-    val isConfigured = sshConfig.ip.isNotBlank()
+
 
     // Запрос разрешений при первом открытии главного экрана
     val batteryOptLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { /* пользователь закрыл диалог батареи — результат нас не интересует */ }
+
+    val vpnPrepareLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            viewModel.startProxy()
+        }
+    }
 
     val notificationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -156,17 +173,38 @@ fun HomeScreen(
     val bottomSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val profilesSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
+    var isRefreshing by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.turn_proxy_title)) },
+                title = {
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text(stringResource(R.string.turn_proxy_title))
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = stringResource(R.string.turn_proxy_version_short),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 1.dp)
+                        )
+                    }
+                },
                 actions = {
                     IconButton(onClick = {
                         HapticUtil.perform(context, HapticUtil.Pattern.CLICK)
-                        onNavigateToSshSetup()
+                        coroutineScope.launch {
+                            val result = viewModel.fetchAndDecryptConfig()
+                            if (result.isSuccess) {
+                                snackbarHostState.showSnackbar("Конфигурация успешно обновлена")
+                            } else {
+                                val err = result.exceptionOrNull()?.message ?: "Ошибка обновления"
+                                snackbarHostState.showSnackbar("Ошибка: $err")
+                            }
+                        }
                     }) {
-                        Icon(painterResource(R.drawable.host_24px), contentDescription = stringResource(R.string.connection))
+                        Icon(painterResource(R.drawable.refresh_24px), contentDescription = "Обновить конфигурацию")
                     }
                     IconButton(onClick = {
                         HapticUtil.perform(context, HapticUtil.Pattern.CLICK)
@@ -179,15 +217,39 @@ fun HomeScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-        Column(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .widthIn(max = 840.dp)
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
-            horizontalAlignment = Alignment.CenterHorizontally
+        Box(modifier = Modifier
+            .fillMaxSize()
+            .padding(padding)
+            .clickable(
+                indication = null,
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+            ) { focusManager.clearFocus() }
         ) {
+            PullToRefreshBox(
+                isRefreshing = isRefreshing,
+                onRefresh = {
+                    isRefreshing = true
+                    coroutineScope.launch {
+                        val result = viewModel.fetchAndDecryptConfig()
+                        isRefreshing = false
+                        if (result.isSuccess) {
+                            snackbarHostState.showSnackbar("Конфигурация успешно обновлена")
+                        } else {
+                            val err = result.exceptionOrNull()?.message ?: "Ошибка обновления"
+                            snackbarHostState.showSnackbar("Ошибка: $err")
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .widthIn(max = 840.dp)
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState()),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
             Spacer(Modifier.height(40.dp))
 
             ProxyToggleButton(
@@ -196,7 +258,12 @@ fun HomeScreen(
                     when (proxyState) {
                         is ProxyState.Idle, is ProxyState.Error -> {
                             HapticUtil.perform(context, HapticUtil.Pattern.TOGGLE_ON)
-                            viewModel.startProxy()
+                            val intent = VpnService.prepare(context)
+                            if (intent != null) {
+                                vpnPrepareLauncher.launch(intent)
+                            } else {
+                                viewModel.startProxy()
+                            }
                         }
                         is ProxyState.Running, is ProxyState.Connecting, is ProxyState.Starting -> {
                             HapticUtil.perform(context, HapticUtil.Pattern.TOGGLE_OFF)
@@ -241,92 +308,92 @@ fun HomeScreen(
                 textAlign = TextAlign.Center
             )
 
-            if (isConfigured) {
-                Spacer(Modifier.height(40.dp))
+            Spacer(Modifier.height(32.dp))
 
-                ElevatedCard(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 24.dp)
-                ) {
-                    Column(modifier = Modifier.padding(20.dp)) {
-                        Text(stringResource(R.string.current_settings), style = MaterialTheme.typography.titleSmall)
-                        Spacer(Modifier.height(12.dp))
-                        ConfigRow(stringResource(R.string.server), clientConfig.serverAddress.redact(privacyMode))
-                        ConfigRow(stringResource(R.string.threads), "${clientConfig.threads}")
-                        ConfigRow(stringResource(R.string.streams_per_cred_label), "${clientConfig.streamsPerCred}")
-                        ConfigRow(
-                            stringResource(R.string.transport_protocol),
-                            if (clientConfig.vlessMode) "VLESS"
-                            else if (clientConfig.useUdp) stringResource(R.string.udp)
-                            else stringResource(R.string.tcp)
-                        )
-                        ConfigRow(stringResource(R.string.local_port), clientConfig.localPort.redact(privacyMode))
-                    }
-                }
+            androidx.compose.material3.Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp),
+                colors = androidx.compose.material3.CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    val isCustom = clientConfig.vkLink.isNotBlank()
 
-                Spacer(Modifier.height(16.dp))
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 24.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .background(
-                                if (sshState is SshConnectionState.Connected)
-                                    MaterialTheme.extendedColorScheme.info
-                                else MaterialTheme.colorScheme.outline,
-                                CircleShape
-                            )
-                    )
-                    Spacer(Modifier.width(8.dp))
                     Text(
-                        when (sshState) {
-                            is SshConnectionState.Connected -> "SSH: ${(sshState as SshConnectionState.Connected).ip.redact(privacyMode)}"
-                            is SshConnectionState.Connecting -> stringResource(R.string.ssh_connecting)
-                            is SshConnectionState.Error -> stringResource(R.string.ssh_error)
-                            else -> stringResource(R.string.ssh_disconnected)
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = "Ссылка на звонок VK",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
-                    if (sshState !is SshConnectionState.Connected) {
-                        Spacer(Modifier.width(8.dp))
-                        TextButton(
-                            onClick = {
-                                HapticUtil.perform(context, HapticUtil.Pattern.CLICK)
-                                viewModel.reconnectSsh()
-                            },
-                            enabled = sshState !is SshConnectionState.Connecting
+                    Spacer(Modifier.height(4.dp))
+                    
+                    val sourceText = if (isCustom) "пользовательская" else "системная"
+                    val sourceColor = if (isCustom) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+                    val annotatedString = androidx.compose.ui.text.buildAnnotatedString {
+                        append("Источник: ")
+                        withStyle(
+                            style = androidx.compose.ui.text.SpanStyle(
+                                color = sourceColor,
+                                fontWeight = FontWeight.Bold
+                            )
                         ) {
-                            Text(stringResource(R.string.reconnect), style = MaterialTheme.typography.labelSmall)
+                            append(sourceText)
                         }
                     }
+                    Text(
+                        text = annotatedString,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+
+                    if (isCustom) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = clientConfig.vkLink,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+
+                    androidx.compose.material3.OutlinedTextField(
+                        value = clientConfig.vkLink,
+                        onValueChange = { newValue ->
+                            viewModel.saveClientConfig(clientConfig.copy(vkLink = newValue))
+                        },
+                        label = { Text("Своя ссылка") },
+                        placeholder = { Text("https://vk.com/call/join/...") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        trailingIcon = {
+                            Row {
+                                IconButton(onClick = {
+                                    val clip = clipboardManager.getText()?.text.orEmpty()
+                                    if (clip.isNotBlank()) {
+                                        viewModel.saveClientConfig(clientConfig.copy(vkLink = clip))
+                                    }
+                                }) {
+                                    Icon(painterResource(R.drawable.content_paste_24px), contentDescription = "Вставить из буфера")
+                                }
+                                if (isCustom) {
+                                    IconButton(onClick = {
+                                        viewModel.saveClientConfig(clientConfig.copy(vkLink = ""))
+                                    }) {
+                                        Icon(painterResource(R.drawable.delete_24px), contentDescription = "Сбросить к системной")
+                                    }
+                                }
+                            }
+                        }
+                    )
                 }
             }
 
             Spacer(Modifier.height(32.dp))
-            // Резерв под прилипший к низу переключатель — он виден всегда.
-            Spacer(Modifier.height(96.dp))
-        }
-
-        // Прилипший к низу переключатель — точка входа в управление профилями.
-        // Виден всегда: даже без сохранённых профилей показывает «Несохранённая
-        // конфигурация» и открывает sheet с действиями save/import.
-        ActiveProfileBar(
-            snapshot = profilesSnapshot,
-            onSwitch = {
-                HapticUtil.perform(context, HapticUtil.Pattern.CLICK)
-                showProfilesSheet.value = true
-            },
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(horizontal = 16.dp, vertical = 12.dp)
-        )
+                }
+            }
         }
     }
 
@@ -594,8 +661,8 @@ private fun InfoBottomSheet(
         item {
             RepoLinkItem(
                 title = stringResource(R.string.android_client),
-                subtitle = "samosvalishe/turn-proxy-android",
-                url = "https://github.com/samosvalishe/turn-proxy-android",
+                subtitle = "VQSeGo/VK-Turn-Proxy",
+                url = "https://github.com/VQSeGo/VK-Turn-Proxy",
                 containerColor = containerColor,
                 onHaptic = { HapticUtil.perform(context, HapticUtil.Pattern.SELECTION) },
                 onOpen = { uriHandler.openUri(it) }
@@ -615,9 +682,20 @@ private fun InfoBottomSheet(
 
         item {
             RepoLinkItem(
-                title = stringResource(R.string.tg_channel),
-                subtitle = null,
-                url = "https://t.me/+53nh4UNiSv5lNTgy",
+                title = stringResource(R.string.tg_bot),
+                subtitle = "@torvaldsvpnbot",
+                url = "https://t.me/torvaldsvpnbot",
+                containerColor = containerColor,
+                onHaptic = { HapticUtil.perform(context, HapticUtil.Pattern.SELECTION) },
+                onOpen = { uriHandler.openUri(it) }
+            )
+        }
+
+        item {
+            RepoLinkItem(
+                title = stringResource(R.string.tg_support),
+                subtitle = "@torvalds_support_bot",
+                url = "https://t.me/torvalds_support_bot",
                 containerColor = containerColor,
                 onHaptic = { HapticUtil.perform(context, HapticUtil.Pattern.SELECTION) },
                 onOpen = { uriHandler.openUri(it) }
@@ -626,72 +704,15 @@ private fun InfoBottomSheet(
 
         item { HorizontalDivider() }
 
-        // Настройки интерфейса
         item {
-            ListItem(
-                headlineContent = { Text(stringResource(R.string.privacy_mode_title)) },
-                supportingContent = { Text(stringResource(R.string.privacy_mode_desc)) },
-                colors = listColors,
-                trailingContent = {
-                    androidx.compose.material3.Switch(
-                        checked = privacyMode,
-                        onCheckedChange = {
-                            HapticUtil.perform(
-                                context,
-                                if (it) HapticUtil.Pattern.TOGGLE_ON else HapticUtil.Pattern.TOGGLE_OFF
-                            )
-                            onPrivacyModeChange(it)
-                        }
-                    )
-                }
-            )
-        }
-
-        item {
-            ListItem(
-                headlineContent = { Text(stringResource(R.string.dynamic_theme_title)) },
-                supportingContent = { Text(stringResource(R.string.dynamic_theme_desc)) },
-                colors = listColors,
-                trailingContent = {
-                    androidx.compose.material3.Switch(
-                        checked = dynamicTheme,
-                        onCheckedChange = {
-                            HapticUtil.perform(
-                                context,
-                                if (it) HapticUtil.Pattern.TOGGLE_ON else HapticUtil.Pattern.TOGGLE_OFF
-                            )
-                            viewModel.setDynamicTheme(it)
-                        }
-                    )
-                }
-            )
-        }
-
-        item { HorizontalDivider() }
-
-        // Сброс
-        item {
-            ListItem(
-                headlineContent = {
-                    Text(
-                        stringResource(R.string.reset_settings),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                },
-                colors = listColors,
-                trailingContent = {
-                    Icon(
-                        painterResource(R.drawable.delete_24px),
-                        contentDescription = stringResource(R.string.reset),
-                        modifier = Modifier.size(20.dp),
-                        tint = MaterialTheme.colorScheme.error
-                    )
-                },
-                modifier = Modifier.clickable {
-                    HapticUtil.perform(context, HapticUtil.Pattern.CLICK)
-                    showResetDialog = true
-                }
+            Text(
+                text = stringResource(R.string.app_description),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
 
@@ -699,7 +720,7 @@ private fun InfoBottomSheet(
         item {
             val tapTimes = remember { mutableStateOf<List<Long>>(emptyList()) }
             Text(
-                text = "v$appVersion",
+                text = stringResource(R.string.turn_proxy_version_full),
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable(

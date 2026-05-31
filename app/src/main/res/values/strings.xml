@@ -3,7 +3,9 @@
 
     <!-- HomeScreen -->
     <string name="nav_home">Главная</string>
-    <string name="turn_proxy_title">Free Turn</string>
+    <string name="turn_proxy_title">Turn Proxy</string>
+    <string name="turn_proxy_version_short">beta-01</string>
+    <string name="turn_proxy_version_full">v1.0.0-beta-01</string>
     <string name="info_desc">Информация</string>
     <string name="proxy_active">Прокси активен</string>
     <string name="proxy_connecting">Подключение…</string>
@@ -40,6 +42,7 @@
 
     <!-- ClientSetupScreen -->
     <string name="client_title">Клиент</string>
+    <string name="settings_title">Настройки</string>
     <string name="connection_title">Подключение</string>
     <string name="server_address_label">Адрес turn-proxy сервера</string>
     <string name="server_address_placeholder">1.2.3.4:56000</string>
@@ -155,7 +158,7 @@
     <string name="step_ssh_check">Проверка SSH…</string>
 
     <!-- OnboardingScreen -->
-    <string name="onboarding_title">Free Turn</string>
+    <string name="onboarding_title">Turn Proxy</string>
     <string name="onboarding_subtitle">Проксируйте WireGuard и Hysteria‑трафик\nчерез TURN‑серверы VK Calls</string>
     <string name="privacy_notice">Мы не собираем никаких данных. Все настройки (SSH-доступ, параметры прокси) хранятся исключительно на вашем устройстве.</string>
     <string name="setup_server">Настроить сервер</string>
@@ -192,7 +195,7 @@
     <string name="privacy_mode_desc">Скрывает IP и порты</string>
 
     <!-- Notifications -->
-    <string name="notif_proxy_title">FreeTurn</string>
+    <string name="notif_proxy_title">Turn Proxy</string>
     <string name="notif_proxy_connecting">Подключение…</string>
     <string name="notif_channel_proxy">Прокси</string>
     <string name="notif_channel_captcha">Капча</string>
@@ -205,7 +208,9 @@
     <string name="captcha_close">Закрыть</string>
 
     <!-- Telegram -->
-    <string name="tg_channel">Telegram-канал</string>
+    <string name="tg_bot">Telegram Torvalds VPN</string>
+    <string name="tg_support">Поддержка</string>
+    <string name="app_description">VK Turn Proxy от Torvalds VPN\n\nПриложение предназначено для обхода белых списков с использованием технологии передачи данных через Turn серверы VK\n\nМы не собираем ваши личные данные, только необходимую информацию для отладки</string>
     <string name="tg_subscribe_title">Следите за обновлениями</string>
     <string name="tg_subscribe_desc">Подпишитесь на Telegram-канал, чтобы узнавать о новых версиях и изменениях первыми.</string>
     <string name="tg_subscribe_btn">Подписаться</string>
