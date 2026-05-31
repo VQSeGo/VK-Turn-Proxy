@@ -1,6 +1,10 @@
 package com.freeturn.app.ui.navigation
 
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
+import androidx.compose.ui.draw.scale
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.AlertDialog
@@ -55,7 +59,7 @@ object Routes {
 }
 
 // Нижнее меню / рельс видно только в основном потоке, не во время онбординга
-private val BOTTOM_NAV_ROUTES = setOf(Routes.HOME, Routes.LOGS, Routes.SERVER_MANAGEMENT, Routes.CLIENT_SETUP)
+private val BOTTOM_NAV_ROUTES = setOf(Routes.HOME, Routes.LOGS, Routes.CLIENT_SETUP)
 
 @Composable
 fun AppNavigation(viewModel: MainViewModel) {
@@ -67,14 +71,11 @@ fun AppNavigation(viewModel: MainViewModel) {
 
     val proxyState by viewModel.proxyState.collectAsStateWithLifecycle()
     val initialOnboardingDone by viewModel.initialOnboardingDone.collectAsStateWithLifecycle()
-    val initialTgSubscribeShown by viewModel.initialTgSubscribeShown.collectAsStateWithLifecycle()
     val startDestination = remember { if (initialOnboardingDone) Routes.HOME else Routes.ONBOARDING }
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
     val showNavSuite = currentRoute in BOTTOM_NAV_ROUTES
-
-    var showTgDialog by rememberSaveable { mutableStateOf(!initialTgSubscribeShown && initialOnboardingDone) }
 
     val adaptiveType = NavigationSuiteScaffoldDefaults
         .calculateFromAdaptiveInfo(currentWindowAdaptiveInfo())
@@ -98,12 +99,21 @@ fun AppNavigation(viewModel: MainViewModel) {
                         }
                     },
                     icon = {
+                        val scale by animateFloatAsState(
+                            targetValue = if (selected) 1.15f else 1.0f,
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioMediumBouncy,
+                                stiffness = Spring.StiffnessLow
+                            ),
+                            label = "nav_icon_scale_${item.route}"
+                        )
                         Crossfade(targetState = selected, label = "nav_icon_${item.route}") { isSelected ->
                             Icon(
                                 painter = painterResource(
                                     if (isSelected) item.selectedIconRes else item.unselectedIconRes
                                 ),
-                                contentDescription = stringResource(item.labelResId)
+                                contentDescription = stringResource(item.labelResId),
+                                modifier = Modifier.scale(scale)
                             )
                         }
                     },
@@ -132,20 +142,7 @@ fun AppNavigation(viewModel: MainViewModel) {
         }
     }
 
-    if (showTgDialog) {
-        val uriHandler = LocalUriHandler.current
-        TelegramSubscribeDialog(
-            onSubscribe = {
-                uriHandler.openUri("https://t.me/+53nh4UNiSv5lNTgy")
-                viewModel.setTgSubscribeShown()
-                showTgDialog = false
-            },
-            onDismiss = {
-                viewModel.setTgSubscribeShown()
-                showTgDialog = false
-            }
-        )
-    }
+
 }
 
 @Composable
@@ -159,82 +156,14 @@ private fun AppNavHost(
         startDestination = startDestination,
         modifier = Modifier
             .fillMaxSize()
-            .statusBarsPadding()
     ) {
-        // Онбординг-мастер (без навигации)
         composable(Routes.ONBOARDING) {
             OnboardingScreen(
-                onSetupServer = { navController.navigate(Routes.SSH_SETUP_OB) },
-                onSkip = {
+                viewModel = viewModel,
+                onSuccess = {
                     viewModel.setOnboardingDone()
                     navController.navigate(Routes.HOME) {
                         popUpTo(navController.graph.startDestinationId) { inclusive = true }
-                        launchSingleTop = true
-                    }
-                }
-            )
-        }
-
-        composable(Routes.SSH_SETUP_OB) {
-            SshSetupScreen(
-                viewModel = viewModel,
-                onConnected = {
-                    navController.navigate(Routes.SERVER_MANAGEMENT_OB) {
-                        popUpTo(Routes.SSH_SETUP_OB) { inclusive = true }
-                        launchSingleTop = true
-                    }
-                },
-                onBack = { navController.popBackStack() }
-            )
-        }
-
-        composable(Routes.SERVER_MANAGEMENT_OB) {
-            ServerManagementScreen(
-                viewModel = viewModel,
-                onContinue = {
-                    navController.navigate(Routes.CLIENT_SETUP_OB) {
-                        launchSingleTop = true
-                    }
-                }
-            )
-        }
-
-        composable(Routes.CLIENT_SETUP_OB) {
-            ClientSetupScreen(
-                viewModel = viewModel,
-                showFinishButton = true,
-                onFinish = {
-                    viewModel.setOnboardingDone()
-                    navController.navigate(Routes.HOME) {
-                        popUpTo(navController.graph.startDestinationId) { inclusive = true }
-                        launchSingleTop = true
-                    }
-                }
-            )
-        }
-
-        // Основной поток (с навигацией)
-        composable(Routes.SSH_SETUP) {
-            SshSetupScreen(
-                viewModel = viewModel,
-                onConnected = {
-                    navController.navigate(Routes.SERVER_MANAGEMENT) {
-                        popUpTo(Routes.SSH_SETUP) { inclusive = true }
-                        launchSingleTop = true
-                    }
-                },
-                onBack = { navController.popBackStack() }
-            )
-        }
-
-        composable(Routes.SERVER_MANAGEMENT) {
-            ServerManagementScreen(
-                viewModel = viewModel,
-                onContinue = {
-                    navController.navigate(Routes.CLIENT_SETUP) {
-                        // Убираем SERVER_MANAGEMENT из back stack,
-                        // иначе он остаётся под CLIENT_SETUP и навигация ломается
-                        popUpTo(Routes.HOME) { inclusive = false; saveState = false }
                         launchSingleTop = true
                     }
                 }
@@ -251,7 +180,7 @@ private fun AppNavHost(
         composable(Routes.HOME) {
             HomeScreen(
                 viewModel = viewModel,
-                onNavigateToSshSetup = { navController.navigate(Routes.SSH_SETUP) }
+                onNavigateToSshSetup = {}
             )
         }
 
@@ -268,29 +197,10 @@ private data class NavItem(
     val unselectedIconRes: Int
 )
 
-@Composable
-private fun TelegramSubscribeDialog(onSubscribe: () -> Unit, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.tg_subscribe_title)) },
-        text = { Text(stringResource(R.string.tg_subscribe_desc)) },
-        confirmButton = {
-            TextButton(
-                onClick = onSubscribe,
-                colors = ButtonDefaults.textButtonColors(
-                    contentColor = MaterialTheme.colorScheme.primary
-                )
-            ) { Text(stringResource(R.string.tg_subscribe_btn)) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.tg_not_now)) }
-        }
-    )
-}
+
 
 private val navItems = listOf(
-    NavItem(Routes.HOME, R.string.nav_home, R.drawable.home_24px, R.drawable.home_outlined_24px),
-    NavItem(Routes.SERVER_MANAGEMENT, R.string.server, R.drawable.database_24px, R.drawable.database_outlined_24px),
-    NavItem(Routes.CLIENT_SETUP, R.string.client_title, R.drawable.mobile_24px, R.drawable.mobile_outlined_24px),
+    NavItem(Routes.HOME, R.string.nav_home, R.drawable.home_24px, R.drawable.home_24px),
+    NavItem(Routes.CLIENT_SETUP, R.string.settings_title, R.drawable.settings_24px, R.drawable.settings_outlined_24px),
     NavItem(Routes.LOGS, R.string.logs_title, R.drawable.terminal_24px, R.drawable.terminal_24px)
 )
