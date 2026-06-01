@@ -85,7 +85,9 @@ class SshRepository(
     suspend fun connectSsh(config: SshConfig): Pair<Boolean, String?> {
         _sshState.value = SshConnectionState.Connecting
         val result = runEcho(config)
-        return if (result.trim() == "OK") {
+        // Сравниваем построчно, а не весь вывод: серверный MOTD/banner или строки
+        // из .bashrc могут попасть в stdout перед "OK" и сломать строгое равенство.
+        return if (result.lines().any { it.trim() == "OK" }) {
             val fp = sshManager.lastSeenFingerprint ?: config.hostFingerprint
             activeSshConfig = config.copy(hostFingerprint = fp)
             _sshState.value = SshConnectionState.Connected(config.ip)

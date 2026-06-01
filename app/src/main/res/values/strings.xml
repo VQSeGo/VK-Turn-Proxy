@@ -114,7 +114,7 @@
     <string name="listen_ip_desc">IP-адрес, к которому биндится сервер. 0.0.0.0 - все интерфейсы. Укажите конкретный WAN IP, если на хосте несколько адресов.</string>
     <string name="turn_client_address">Адрес TURN‑клиента</string>
     <string name="turn_client_placeholder">127.0.0.1:40537</string>
-    <string name="turn_client_desc">Локальный WireGuard/Hysteria-клиент на стороне сервера</string>
+    <string name="turn_client_desc">Локальный WireGuard/Xray-клиент на стороне сервера</string>
     <string name="install">Установить / обновить</string>
     <string name="server_install_cached">Актуально</string>
     <string name="server_install_downloaded">Обновлено</string>

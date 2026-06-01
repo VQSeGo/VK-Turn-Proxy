@@ -9,6 +9,7 @@ import com.freeturn.app.viewmodel.ProxyViewModel
 import com.freeturn.app.viewmodel.ServerViewModel
 import com.freeturn.app.viewmodel.SettingsViewModel
 import org.koin.android.ext.koin.androidContext
+import org.koin.androidx.viewmodel.dsl.viewModel
 import org.koin.androidx.viewmodel.dsl.viewModelOf
 import org.koin.dsl.module
 
@@ -20,6 +21,8 @@ val appModule = module {
     single { ProxyOrchestrator(get(), get(), get()) }
 
     viewModelOf(::ProxyViewModel)
-    viewModelOf(::ServerViewModel)
-    viewModelOf(::SettingsViewModel)
+    // Context резолвим явно через androidContext() (Application), а не неявно из
+    // графа — VM сами сводят его к applicationContext.
+    viewModel { ServerViewModel(get(), get(), get(), androidContext()) }
+    viewModel { SettingsViewModel(get(), get(), get(), get(), get(), androidContext()) }
 }

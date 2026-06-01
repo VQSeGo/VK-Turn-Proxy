@@ -34,8 +34,12 @@ class SettingsViewModel(
     private val sshRepository: SshRepository,
     private val appUpdater: AppUpdater,
     private val orchestrator: ProxyOrchestrator,
-    private val context: Context
+    context: Context
 ) : ViewModel() {
+
+    // ViewModel переживает пересоздание Activity — храним applicationContext,
+    // чтобы не утекала Activity.
+    private val appContext = context.applicationContext
 
     val clientConfig: StateFlow<ClientConfig> = prefs.clientConfigFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ClientConfig())
@@ -107,59 +111,76 @@ class SettingsViewModel(
         }
     }
 
+    // Во всех сеттерах read-modify-write выполняется ВНУТРИ profileMutex: чтение
+    // current вне лока давало lost update — два параллельных сеттера читали один
+    // снапшот, затем по очереди писали свой copy(), и второй затирал первого.
     fun setProvider(value: String) {
         viewModelScope.launch {
-            val current = prefs.clientConfigFlow.first()
-            if (current.provider == value) return@launch
-            profileMutex.withLock { prefs.saveClientConfig(current.copy(provider = value)) }
+            profileMutex.withLock {
+                val current = prefs.clientConfigFlow.first()
+                if (current.provider == value) return@withLock
+                prefs.saveClientConfig(current.copy(provider = value))
+            }
         }
     }
 
     fun setDnsMode(value: String) {
         viewModelScope.launch {
-            val current = prefs.clientConfigFlow.first()
-            if (current.dnsMode == value) return@launch
-            profileMutex.withLock { prefs.saveClientConfig(current.copy(dnsMode = value)) }
+            profileMutex.withLock {
+                val current = prefs.clientConfigFlow.first()
+                if (current.dnsMode == value) return@withLock
+                prefs.saveClientConfig(current.copy(dnsMode = value))
+            }
         }
     }
 
     fun setUseUdp(enabled: Boolean) {
         viewModelScope.launch {
-            val current = prefs.clientConfigFlow.first()
-            if (current.useUdp == enabled) return@launch
-            profileMutex.withLock { prefs.saveClientConfig(current.copy(useUdp = enabled)) }
+            profileMutex.withLock {
+                val current = prefs.clientConfigFlow.first()
+                if (current.useUdp == enabled) return@withLock
+                prefs.saveClientConfig(current.copy(useUdp = enabled))
+            }
         }
     }
 
     fun setManualCaptcha(enabled: Boolean) {
         viewModelScope.launch {
-            val current = prefs.clientConfigFlow.first()
-            if (current.manualCaptcha == enabled) return@launch
-            profileMutex.withLock { prefs.saveClientConfig(current.copy(manualCaptcha = enabled)) }
+            profileMutex.withLock {
+                val current = prefs.clientConfigFlow.first()
+                if (current.manualCaptcha == enabled) return@withLock
+                prefs.saveClientConfig(current.copy(manualCaptcha = enabled))
+            }
         }
     }
 
     fun setUseCarrierDns(enabled: Boolean) {
         viewModelScope.launch {
-            val current = prefs.clientConfigFlow.first()
-            if (current.useCarrierDns == enabled) return@launch
-            profileMutex.withLock { prefs.saveClientConfig(current.copy(useCarrierDns = enabled)) }
+            profileMutex.withLock {
+                val current = prefs.clientConfigFlow.first()
+                if (current.useCarrierDns == enabled) return@withLock
+                prefs.saveClientConfig(current.copy(useCarrierDns = enabled))
+            }
         }
     }
 
     fun setDebugMode(enabled: Boolean) {
         viewModelScope.launch {
-            val current = prefs.clientConfigFlow.first()
-            if (current.debugMode == enabled) return@launch
-            profileMutex.withLock { prefs.saveClientConfig(current.copy(debugMode = enabled)) }
+            profileMutex.withLock {
+                val current = prefs.clientConfigFlow.first()
+                if (current.debugMode == enabled) return@withLock
+                prefs.saveClientConfig(current.copy(debugMode = enabled))
+            }
         }
     }
 
     fun setMagicSwitch(enabled: Boolean) {
         viewModelScope.launch {
-            val current = prefs.clientConfigFlow.first()
-            if (current.magicSwitch == enabled) return@launch
-            profileMutex.withLock { prefs.saveClientConfig(current.copy(magicSwitch = enabled)) }
+            profileMutex.withLock {
+                val current = prefs.clientConfigFlow.first()
+                if (current.magicSwitch == enabled) return@withLock
+                prefs.saveClientConfig(current.copy(magicSwitch = enabled))
+            }
         }
     }
 
@@ -286,7 +307,7 @@ class SettingsViewModel(
 
     private fun serverAddrToProfileName(serverAddr: String): String =
         serverAddr.substringBefore(':').takeIf { it.isNotBlank() }
-            ?: context.getString(com.freeturn.app.R.string.profile_default_name)
+            ?: appContext.getString(com.freeturn.app.R.string.profile_default_name)
 
     private fun uniqueProfileName(base: String, existing: List<Profile>, excludingId: String?): String {
         val taken = existing
@@ -303,11 +324,13 @@ class SettingsViewModel(
     // --- Server & Proxy Switches (TcpForward, Bond, Obf, Sync) ---
     fun setBond(enabled: Boolean) {
         viewModelScope.launch {
-            val current = prefs.clientConfigFlow.first()
-            if (current.bond == enabled) return@launch
-            val next = current.copy(bond = enabled)
-            profileMutex.withLock { prefs.saveClientConfig(next) }
-            orchestrator.restartProxyIfRunning()
+            val changed = profileMutex.withLock {
+                val current = prefs.clientConfigFlow.first()
+                if (current.bond == enabled) return@withLock false
+                prefs.saveClientConfig(current.copy(bond = enabled))
+                true
+            }
+            if (changed) orchestrator.restartProxyIfRunning()
         }
     }
 
@@ -319,13 +342,16 @@ class SettingsViewModel(
             val effectiveMatches = known?.obfProfile?.let { it == profile } ?: true
             if (storedMatches && effectiveMatches) return@launch
             val sync = prefs.clientConfigFlow.first().syncServerSwitches
-            var next = current.copy(obfProfile = profile)
-            if (profile != ObfProfile.NONE && next.obfKey.isBlank() && sync) {
-                val key = sshRepository.generateObfKey()
-                if (!key.isNullOrBlank()) next = next.copy(obfKey = key)
-            }
-            if (!storedMatches || next.obfKey != current.obfKey) {
-                profileMutex.withLock { prefs.saveServerOpts(next) }
+            // generateObfKey — сетевой SSH-вызов, не держим под profileMutex.
+            val generatedKey: String? =
+                if (profile != ObfProfile.NONE && current.obfKey.isBlank() && sync)
+                    sshRepository.generateObfKey()?.takeIf { it.isNotBlank() }
+                else null
+            profileMutex.withLock {
+                val latest = prefs.serverOptsFlow.first()
+                var next = latest.copy(obfProfile = profile)
+                if (generatedKey != null && next.obfKey.isBlank()) next = next.copy(obfKey = generatedKey)
+                if (next != latest) prefs.saveServerOpts(next)
             }
             if (sync) orchestrator.restartServerIfRunning()
             orchestrator.restartProxyIfRunning()
@@ -334,11 +360,13 @@ class SettingsViewModel(
 
     fun setSyncServerSwitches(enabled: Boolean) {
         viewModelScope.launch {
-            val current = prefs.clientConfigFlow.first()
-            if (current.syncServerSwitches == enabled) return@launch
-            val next = current.copy(syncServerSwitches = enabled)
-            profileMutex.withLock { prefs.saveClientConfig(next) }
-            if (enabled) {
+            val changed = profileMutex.withLock {
+                val current = prefs.clientConfigFlow.first()
+                if (current.syncServerSwitches == enabled) return@withLock false
+                prefs.saveClientConfig(current.copy(syncServerSwitches = enabled))
+                true
+            }
+            if (changed && enabled) {
                 orchestrator.restartServerIfRunning()
                 orchestrator.restartProxyIfRunning()
             }
@@ -347,11 +375,14 @@ class SettingsViewModel(
 
     fun setObfKey(key: String) {
         viewModelScope.launch {
-            val current = prefs.serverOptsFlow.first()
             val trimmed = key.trim()
-            if (current.obfKey == trimmed) return@launch
-            val next = current.copy(obfKey = trimmed)
-            profileMutex.withLock { prefs.saveServerOpts(next) }
+            val changed = profileMutex.withLock {
+                val current = prefs.serverOptsFlow.first()
+                if (current.obfKey == trimmed) return@withLock false
+                prefs.saveServerOpts(current.copy(obfKey = trimmed))
+                true
+            }
+            if (!changed) return@launch
             if (prefs.clientConfigFlow.first().syncServerSwitches) orchestrator.restartServerIfRunning()
             orchestrator.restartProxyIfRunning()
         }
@@ -365,8 +396,10 @@ class SettingsViewModel(
             val effectiveMatches = known?.tcpMode?.let { it == enabled } ?: true
             if (storedMatches && effectiveMatches) return@launch
             if (!storedMatches) {
-                val next = current.copy(tcpForward = enabled)
-                profileMutex.withLock { prefs.saveClientConfig(next) }
+                profileMutex.withLock {
+                    val latest = prefs.clientConfigFlow.first()
+                    if (latest.tcpForward != enabled) prefs.saveClientConfig(latest.copy(tcpForward = enabled))
+                }
             }
             if (current.syncServerSwitches) {
                 val serverRunning = (sshRepository.serverState.value as? ServerState.Known)?.running == true
@@ -399,17 +432,17 @@ class SettingsViewModel(
     fun resetAllSettings() {
         viewModelScope.launch {
             if (ProxyServiceState.isRunning.value) {
-                context.stopService(Intent(context, ProxyService::class.java))
+                appContext.stopService(Intent(appContext, ProxyService::class.java))
             }
             prefs.resetAll()
             sshRepository.resetAll()
             proxyManager.clearState()
             ProxyServiceState.clearLogs()
 
-            val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+            val intent = appContext.packageManager.getLaunchIntentForPackage(appContext.packageName)
             if (intent != null) {
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                context.startActivity(intent)
+                appContext.startActivity(intent)
             }
         }
     }

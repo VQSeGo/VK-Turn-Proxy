@@ -13,10 +13,12 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.content.pm.ServiceInfo
 import android.os.PowerManager
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.ServiceCompat
 import com.freeturn.app.data.AppPreferences
 import com.freeturn.app.data.DnsMode
 import com.freeturn.app.data.Provider
@@ -131,7 +133,21 @@ class ProxyService : Service() {
             }
         }
         currentBaseStatus = getString(R.string.notif_proxy_connecting)
-        startForeground(NOTIF_ID_FG, createNotification())
+        // Явно передаём FGS-тип (specialUse доступен с API 34; ниже — без типа).
+        // Оборачиваем в try/catch: ForegroundServiceStartNotAllowedException (API 31+
+        // при старте из фона) и InvalidForegroundServiceTypeException не должны
+        // ронять процесс.
+        val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
+        try {
+            ServiceCompat.startForeground(this, NOTIF_ID_FG, createNotification(), fgsType)
+        } catch (e: Exception) {
+            ProxyServiceState.addLog("Не удалось запустить foreground-сервис: ${e.message}")
+            ProxyServiceState.setStartupResult(StartupResult.Failed(e.message ?: "FGS start failed"))
+            ProxyServiceState.setRunning(false)
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
         // Если процесс ядра ещё жив — это повторный onStartCommand (например,
         // sticky-рестарт). Не запускаем второй процесс, но требование о
@@ -146,6 +162,10 @@ class ProxyService : Service() {
         restartCount.set(0)
 
         val powerManager = getSystemService(POWER_SERVICE) as PowerManager
+        // Освобождаем предыдущий wakelock перед созданием нового — иначе при
+        // повторном onStartCommand с уже мёртвым process старый объект остаётся
+        // held до GC (утечка wakelock).
+        if (wakeLock?.isHeld == true) wakeLock?.release()
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "VkTurn::BgLock")
         wakeLock?.acquire(TimeUnit.HOURS.toMillis(24))
 

@@ -22,8 +22,11 @@ class ServerViewModel(
     private val sshRepository: SshRepository,
     private val prefs: AppPreferences,
     private val orchestrator: ProxyOrchestrator,
-    private val context: Context
+    context: Context
 ) : ViewModel() {
+
+    // applicationContext: ViewModel переживает Activity — иначе утечка.
+    private val appContext = context.applicationContext
 
     val sshState: StateFlow<SshConnectionState> = sshRepository.sshState
     val serverState: StateFlow<ServerState> = sshRepository.serverState
@@ -50,9 +53,9 @@ class ServerViewModel(
                 if (config.hostFingerprint.isEmpty() && fp != null) {
                     prefs.saveSshFingerprint(fp)
                 }
-                HapticUtil.perform(context, HapticUtil.Pattern.SUCCESS)
+                HapticUtil.perform(appContext, HapticUtil.Pattern.SUCCESS)
             } else {
-                HapticUtil.perform(context, HapticUtil.Pattern.ERROR)
+                HapticUtil.perform(appContext, HapticUtil.Pattern.ERROR)
             }
         }
     }

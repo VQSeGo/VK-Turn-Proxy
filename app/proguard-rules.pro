@@ -9,11 +9,12 @@
 -keep class com.jcraft.jsch.** { *; }
 -dontwarn com.jcraft.jsch.**
 
-# ── EdDSA (Ed25519) ───────────────────────────────────────────────────────────
-# JSch обращается к net.i2p.crypto.eddsa через Security Provider (reflection).
-# R8 стрипает эти классы в release → Ed25519-ключи не работают.
--keep class net.i2p.crypto.eddsa.** { *; }
--dontwarn net.i2p.crypto.eddsa.**
+# ── Bouncy Castle (Ed25519 / curve25519 / chacha20) ───────────────────────────
+# mwiede/jsch 2.x подгружает алгоритмы BC через reflection. R8 стрипает эти
+# классы в release → Ed25519-ключи и современный KEX не работают.
+-keep class org.bouncycastle.** { *; }
+-dontwarn org.bouncycastle.**
+-dontwarn javax.naming.**
 
 # ── Kotlin Coroutines ─────────────────────────────────────────────────────────
 -keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}

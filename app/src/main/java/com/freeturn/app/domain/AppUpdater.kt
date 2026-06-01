@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.core.content.FileProvider
 import com.freeturn.app.viewmodel.UpdateState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -59,6 +60,9 @@ class AppUpdater(private val context: Context) {
             } else {
                 _state.value = UpdateState.NoUpdate
             }
+        } catch (e: CancellationException) {
+            // Отмена корутины — штатный путь (structured concurrency), не ошибка сети.
+            throw e
         } catch (_: Exception) {
             _state.value = if (silent) UpdateState.Idle
             else UpdateState.Error("Нет соединения с сервером")
@@ -76,28 +80,42 @@ class AppUpdater(private val context: Context) {
             withContext(Dispatchers.IO) {
                 val connection = URL(url).openConnection() as HttpURLConnection
                 connection.instanceFollowRedirects = true
-                connection.connect()
+                connection.connectTimeout = 15_000
+                connection.readTimeout = 30_000
+                try {
+                    connection.connect()
+                    // Без проверки кода 404/HTML-страница редиректа запишется в update.apk
+                    // и FileProvider отдаст мусор установщику.
+                    if (connection.responseCode !in 200..299) {
+                        throw java.io.IOException("HTTP ${connection.responseCode}")
+                    }
 
-                val totalSize = connection.contentLength.toLong()
-                var downloaded = 0L
+                    val totalSize = connection.contentLength.toLong()
+                    var downloaded = 0L
 
-                connection.inputStream.use { input ->
-                    apkFile.outputStream().use { output ->
-                        val buffer = ByteArray(8192)
-                        var bytesRead: Int
-                        while (input.read(buffer).also { bytesRead = it } != -1) {
-                            output.write(buffer, 0, bytesRead)
-                            downloaded += bytesRead
-                            if (totalSize > 0) {
-                                _state.value = UpdateState.Downloading(
-                                    (downloaded * 100 / totalSize).toInt()
-                                )
+                    connection.inputStream.use { input ->
+                        apkFile.outputStream().use { output ->
+                            val buffer = ByteArray(8192)
+                            var bytesRead: Int
+                            while (input.read(buffer).also { bytesRead = it } != -1) {
+                                output.write(buffer, 0, bytesRead)
+                                downloaded += bytesRead
+                                if (totalSize > 0) {
+                                    _state.value = UpdateState.Downloading(
+                                        (downloaded * 100 / totalSize).toInt()
+                                    )
+                                }
                             }
                         }
                     }
+                } finally {
+                    connection.disconnect()
                 }
             }
             _state.value = UpdateState.ReadyToInstall
+        } catch (e: CancellationException) {
+            apkFile.delete()
+            throw e
         } catch (e: Exception) {
             apkFile.delete()
             _state.value = UpdateState.Error("Ошибка загрузки: ${e.message}")

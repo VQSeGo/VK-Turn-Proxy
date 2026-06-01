@@ -42,15 +42,7 @@ class SSHManager {
         var tempSession: Session? = null
         try {
             val jsch = JSch()
-            if (sshKey.isNotBlank()) {
-                // OpenSSH ed25519/RSA-ключи требуют LF и финального перевода строки —
-                // при вставке через Android-textfield/Windows может прилететь CRLF, и парсер
-                // OPENSSH PRIVATE KEY роняет ключ. Нормализуем перед addIdentity.
-                // Парольная фраза (если задана пользователем) приходит в pass-поле.
-                val keyBytes = normalizePrivateKey(sshKey)
-                val passphrase = pass.takeIf { it.isNotEmpty() }?.toByteArray(Charsets.UTF_8)
-                jsch.addIdentity("identity", keyBytes, null, passphrase)
-            }
+            if (sshKey.isNotBlank()) addKeyIdentity(jsch, sshKey, pass)
             tempSession = jsch.getSession(user, ip, port)
             if (sshKey.isBlank()) {
                 tempSession.setPassword(pass)
@@ -128,9 +120,7 @@ class SSHManager {
         var tempSession: Session? = null
         try {
             val jsch = JSch()
-            if (sshKey.isNotBlank()) {
-                jsch.addIdentity("identity", sshKey.toByteArray(Charsets.UTF_8), null, null)
-            }
+            if (sshKey.isNotBlank()) addKeyIdentity(jsch, sshKey, pass)
             tempSession = jsch.getSession(user, ip, port)
             if (sshKey.isBlank()) tempSession.setPassword(pass)
             tempSession.hostKeyRepository = tofu
@@ -177,6 +167,21 @@ class SSHManager {
         } finally {
             tempSession?.disconnect()
         }
+    }
+
+    /**
+     * Загружает приватный ключ в JSch для key-аутентификации.
+     *
+     * OpenSSH ed25519/RSA-ключи требуют LF и финального перевода строки — при вставке
+     * через Android-textfield/Windows может прилететь CRLF, и парсер OPENSSH PRIVATE KEY
+     * роняет ключ. Нормализуем перед addIdentity. Парольная фраза ключа (если он
+     * зашифрован) приходит в [pass]. Ed25519 требует Bouncy Castle на classpath
+     * (на Android нет Java 15 EdDSA) — см. libs.versions.toml.
+     */
+    private fun addKeyIdentity(jsch: JSch, sshKey: String, pass: String) {
+        val keyBytes = normalizePrivateKey(sshKey)
+        val passphrase = pass.takeIf { it.isNotEmpty() }?.toByteArray(Charsets.UTF_8)
+        jsch.addIdentity("identity", keyBytes, null, passphrase)
     }
 
     private fun normalizePrivateKey(raw: String): ByteArray {

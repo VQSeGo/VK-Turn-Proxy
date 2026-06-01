@@ -388,6 +388,20 @@ fun ClientSetupScreen(
                     )
                 }
 
+                // Bond — client-only флаг (сервер детектит сам). SSH не нужен;
+                // показываем только в TCP-форвард режиме.
+                if (effectiveTcpForward) {
+                    SwitchRow(
+                        label = stringResource(R.string.client_bond),
+                        description = stringResource(R.string.client_bond_desc),
+                        checked = saved.bond,
+                        onCheckedChange = {
+                            HapticUtil.perform(context, if (it) HapticUtil.Pattern.TOGGLE_ON else HapticUtil.Pattern.TOGGLE_OFF)
+                            settingsViewModel.setBond(it)
+                        }
+                    )
+                }
+
                 HorizontalDivider(Modifier, DividerDefaults.Thickness, DividerDefaults.color)
 
                 Text(
@@ -411,30 +425,38 @@ fun ClientSetupScreen(
                 val lockedHint = if (syncOn)
                     stringResource(R.string.locked_disconnect_hint) else null
 
-                SwitchRow(
-                    label = stringResource(R.string.tcp_forward_mode),
-                    description = lockedHint?.takeIf { !isSshConnected }
-                        ?: stringResource(R.string.tcp_forward_mode_desc),
-                    checked = effectiveTcpForward,
-                    enabled = controlsEnabled,
-                    onCheckedChange = {
-                        HapticUtil.perform(context, if (it) HapticUtil.Pattern.TOGGLE_ON else HapticUtil.Pattern.TOGGLE_OFF)
-                        settingsViewModel.setTcpForward(it)
+                // TCP-форвард — табы (UDP по умолчанию / TCP для проброса). Синхр. с сервером.
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column {
+                        Text(stringResource(R.string.tcp_forward_mode), style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            lockedHint?.takeIf { !isSshConnected }
+                                ?: stringResource(R.string.tcp_forward_mode_desc),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
-                )
-
-                // Bond — client-only флаг (сервер детектит сам). SSH не нужен;
-                // активен только в TCP-форвард режиме.
-                SwitchRow(
-                    label = stringResource(R.string.client_bond),
-                    description = stringResource(R.string.client_bond_desc),
-                    checked = saved.bond,
-                    enabled = effectiveTcpForward,
-                    onCheckedChange = {
-                        HapticUtil.perform(context, if (it) HapticUtil.Pattern.TOGGLE_ON else HapticUtil.Pattern.TOGGLE_OFF)
-                        settingsViewModel.setBond(it)
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        SegmentedButton(
+                            selected = !effectiveTcpForward,
+                            enabled = controlsEnabled,
+                            onClick = {
+                                HapticUtil.perform(context, HapticUtil.Pattern.TOGGLE_ON)
+                                settingsViewModel.setTcpForward(false)
+                            },
+                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                        ) { Text(stringResource(R.string.udp)) }
+                        SegmentedButton(
+                            selected = effectiveTcpForward,
+                            enabled = controlsEnabled,
+                            onClick = {
+                                HapticUtil.perform(context, HapticUtil.Pattern.TOGGLE_ON)
+                                settingsViewModel.setTcpForward(true)
+                            },
+                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                        ) { Text(stringResource(R.string.tcp)) }
                     }
-                )
+                }
 
                 // Профиль обфускации — табы (как транспорт). Должен совпадать с сервером.
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
