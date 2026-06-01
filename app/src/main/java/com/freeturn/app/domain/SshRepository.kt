@@ -141,7 +141,7 @@ class SshRepository(
     suspend fun installServer(): InstallOutcome {
         val cfg = activeSshConfig ?: return InstallOutcome.Failed("not connected")
         if (cfg.ip.isEmpty()) return InstallOutcome.Failed("no SSH config")
-        _serverState.value = ServerState.Working("Установка vk-turn-proxy...")
+        _serverState.value = ServerState.Working("Установка free-turn-proxy...")
 
         val result = runCmd(cfg, "Установка", ServerCommand.Install)
         return when (result) {

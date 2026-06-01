@@ -1,7 +1,7 @@
 package com.freeturn.app.domain.server
 
 /**
- * Результат выполнения серверной команды. Парсится из stdout `vk-turn-control.sh`.
+ * Результат выполнения серверной команды. Парсится из stdout `free-turn-control.sh`.
  *
  * Контракт скрипта:
  * - Каждая строка вида `KEY=VALUE` идёт в [Ok.kv].

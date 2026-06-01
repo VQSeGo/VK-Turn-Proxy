@@ -1,8 +1,8 @@
 package com.freeturn.app.domain.server
 
 /**
- * Команды управления сервером, которые транслируются в подкоманды
- * `vk-turn-control.sh`. Скрипт стримится через SSH stdin (см. [ServerControl]).
+ * Команда, которую мы хотим выполнить на сервере. Соответствует аргументам
+ * `free-turn-control.sh`. Скрипт стримится через SSH stdin (см. [ServerControl]).
  */
 sealed class ServerCommand {
     data object Probe : ServerCommand()

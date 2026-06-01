@@ -176,7 +176,7 @@ fun ServerManagementScreen(
                             activeColor = MaterialTheme.extendedColorScheme.info
                         )
                         Spacer(Modifier.height(10.dp))
-                        StatusRow(stringResource(R.string.vk_turn_proxy), serverKnown?.running == true)
+                        StatusRow(stringResource(R.string.free_turn_proxy), serverKnown?.running == true)
 
                         if (serverKnown?.installed == true && !serverKnown.version.isNullOrBlank()) {
                             Spacer(Modifier.height(8.dp))

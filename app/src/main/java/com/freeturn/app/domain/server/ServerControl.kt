@@ -5,7 +5,7 @@ import com.freeturn.app.SSHManager
 import com.freeturn.app.data.SshConfig
 
 /**
- * Запускает [ServerCommand] на удалённом хосте, стримя `vk-turn-control.sh`
+ * Запускает [ServerCommand] на удалённом хосте, стримя `free-turn-control.sh`
  * (asset) через SSH stdin. Скрипт грузится один раз, дальше он будет
  * передаваться в bash при каждом вызове — это даёт простоту (нет sync-проблемы
  * с серверной копией) и идемпотентность (скрипт сам решает install/cached).
@@ -54,6 +54,6 @@ class ServerControl(
     }
 
     companion object {
-        const val SCRIPT_ASSET = "vk-turn-control.sh"
+        const val SCRIPT_ASSET = "free-turn-control.sh"
     }
 }

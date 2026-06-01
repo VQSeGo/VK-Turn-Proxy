@@ -103,7 +103,7 @@
     <!-- ServerManagementScreen -->
     <string name="server_status">Статус сервера</string>
     <string name="ssh_connection">SSH‑соединение</string>
-    <string name="vk_turn_proxy">vk‑turn‑proxy</string>
+    <string name="free_turn_proxy">free-turn-proxy</string>
     <string name="error_format">Ошибка: %1$s</string>
     <string name="server_config">Конфигурация сервера</string>
     <string name="listen_port">Порт прослушивания</string>

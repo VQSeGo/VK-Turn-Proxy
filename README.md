@@ -2,7 +2,7 @@
 
 # FreeTurn
 
-**Android-клиент для [vk-turn-proxy](https://github.com/cacggghp/vk-turn-proxy)** — проброс WireGuard / Hysteria через TURN-серверы VK.
+**Android-клиент для [free-turn-proxy](https://github.com/samosvalishe/free-turn-proxy)** - проброс WireGuard / Xray трафика через TURN-сервера
 
 ![Android](https://img.shields.io/badge/Android-6.0%2B-3DDC84?logo=android&logoColor=white)
 ![Kotlin](https://img.shields.io/badge/Kotlin-Compose-7F52FF?logo=kotlin&logoColor=white)
