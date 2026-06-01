@@ -14,6 +14,7 @@ jsch = "2.28.0"
 coroutinesAndroid = "1.10.2"
 securityCrypto = "1.1.0"
 eddsa = "0.3.0"
+koin = "3.5.6"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -35,6 +36,7 @@ androidx-security-crypto = { group = "androidx.security", name = "security-crypt
 jsch = { group = "com.github.mwiede", name = "jsch", version.ref = "jsch" }
 eddsa = { group = "net.i2p.crypto", name = "eddsa", version.ref = "eddsa" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutinesAndroid" }
+koin-androidx-compose = { group = "io.insert-koin", name = "koin-androidx-compose", version.ref = "koin" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

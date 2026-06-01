@@ -10,5 +10,11 @@ class App : Application() {
         if (Security.getProvider("EdDSA") == null) {
             Security.addProvider(EdDSASecurityProvider())
         }
+        
+        org.koin.core.context.startKoin {
+            org.koin.android.ext.koin.androidLogger()
+            org.koin.android.ext.koin.androidContext(this@App)
+            org.koin.core.context.loadKoinModules(com.freeturn.app.di.appModule)
+        }
     }
 }

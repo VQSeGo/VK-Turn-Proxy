@@ -74,4 +74,5 @@ dependencies {
     implementation(libs.androidx.compose.material3.adaptive.nav.suite)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
+    implementation(libs.koin.androidx.compose)
 }
