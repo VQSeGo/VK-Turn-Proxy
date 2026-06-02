@@ -96,7 +96,6 @@ class ProxyService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
-    @Volatile private var networkInitialized = false
     @Volatile private var networkDebounceJob: kotlinx.coroutines.Job? = null
     @Volatile private var lastPhysicalNetworkKey: String? = null
     private val restartCount = AtomicInteger(0)
@@ -584,11 +583,9 @@ class ProxyService : Service() {
     // Network handover
 
     private fun registerNetworkCallback() {
-        networkInitialized = false
         val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
         val registeredAt = SystemClock.elapsedRealtime()
         lastPhysicalNetworkKey = physicalNetworkKey(cm)
-        networkInitialized = true
 
         // Перезапуск только когда реально меняется ФИЗИЧЕСКАЯ сеть (Wi-Fi↔LTE и т.п.).
         // WireGuard поднимает свой VPN-интерфейс — без фильтрации NOT_VPN его появление
@@ -661,6 +658,9 @@ class ProxyService : Service() {
      * хендовере сети; не меняется при поднятии/опускании WG-интерфейса.
      */
     private fun physicalNetworkKey(cm: ConnectivityManager): String? {
+        // allNetworks deprecated с API 31, но это единственный синхронный способ
+        // снять полный снимок текущих сетей внутри колбэка. Подавляем осознанно.
+        @Suppress("DEPRECATION")
         return cm.allNetworks.mapNotNull { network ->
             val caps = cm.getNetworkCapabilities(network) ?: return@mapNotNull null
             if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) ||
@@ -836,9 +836,12 @@ class ProxyService : Service() {
         cancelCaptchaNotification()
         ProxyServiceState.addLog("=== ОСТАНОВКА ИЗ ИНТЕРФЕЙСА ===")
         process.get()?.destroyCompat()
-        // serviceScope отменяется ниже — финальный stop() WG делаем синхронно здесь,
-        // иначе корутинный finally может не успеть выполниться.
-        runBlocking { wireGuard.stop() }
+        // WG-teardown — блокирующий JNI/IO; держать им main-поток нельзя (ANR).
+        // serviceScope гасим сразу, поэтому стоп туннеля уводим на отдельный поток
+        // без ожидания: туннель опустится сам, а если процесс прибьют — VpnService
+        // снимет ОС вместе с процессом.
+        val wg = wireGuard
+        Thread { runBlocking { wg.stop() } }.start()
         serviceScope.cancel()
         if (wakeLock?.isHeld == true) wakeLock?.release()
     }
