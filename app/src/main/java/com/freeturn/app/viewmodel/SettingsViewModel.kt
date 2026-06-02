@@ -84,6 +84,8 @@ class SettingsViewModel(
             val tgShown = prefs.tgSubscribeShownFlow.first()
             _initialOnboardingDone.value = done
             _initialTgSubscribeShown.value = tgShown
+            // Восстанавливаем сохранённое состояние тоггла логов при старте.
+            ProxyServiceState.setLogsEnabled(prefs.clientConfigFlow.first().logsEnabled)
             _isInitialized.value = true
         }
         viewModelScope.launch {
@@ -108,6 +110,8 @@ class SettingsViewModel(
     fun saveClientConfig(config: ClientConfig) {
         viewModelScope.launch {
             profileMutex.withLock { prefs.saveClientConfig(config) }
+            // Тоггл логов применяем сразу, не дожидаясь рестарта прокси.
+            ProxyServiceState.setLogsEnabled(config.logsEnabled)
         }
     }
 
@@ -181,6 +185,27 @@ class SettingsViewModel(
                 if (current.magicSwitch == enabled) return@withLock
                 prefs.saveClientConfig(current.copy(magicSwitch = enabled))
             }
+        }
+    }
+
+    fun setSplitTunnelMode(value: String) {
+        viewModelScope.launch {
+            profileMutex.withLock {
+                val current = prefs.clientConfigFlow.first()
+                if (current.splitTunnelMode == value) return@withLock
+                prefs.saveClientConfig(current.copy(splitTunnelMode = value))
+            }
+        }
+    }
+
+    fun setLogsEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            profileMutex.withLock {
+                val current = prefs.clientConfigFlow.first()
+                if (current.logsEnabled == enabled) return@withLock
+                prefs.saveClientConfig(current.copy(logsEnabled = enabled))
+            }
+            ProxyServiceState.setLogsEnabled(enabled)
         }
     }
 

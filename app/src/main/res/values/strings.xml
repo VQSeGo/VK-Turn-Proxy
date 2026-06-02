@@ -242,4 +242,32 @@
     <string name="notif_proxy_stop_action">Отключить</string>
     <string name="notif_proxy_status_format">Потоки: %1$d/%2$d • %3$s</string>
     <string name="tile_service_label">Free Turn</string>
+    <string name="proxy_active_wireguard">Прокси и WireGuard активны</string>
+
+    <!-- Туннельное приложение (WireGuard) -->
+    <string name="tunnel_transport_title">Туннельное приложение</string>
+    <string name="tunnel_transport_desc">Поднимает VPN-туннель поверх локального прокси: трафик устройства заворачивается через TURN-релей. Оставьте конфиг пустым, чтобы не использовать туннель.</string>
+    <string name="transport_wireguard">WireGuard</string>
+    <string name="wireguard_section">WireGuard</string>
+    <string name="wireguard_tunnel_name">Имя туннеля</string>
+    <string name="wireguard_config_label">Конфигурация WireGuard (.conf)</string>
+    <string name="wireguard_config_placeholder">[Interface]\nPrivateKey = …\nAddress = …\n\n[Peer]\nPublicKey = …\nAllowedIPs = 0.0.0.0/0</string>
+    <string name="wireguard_config_support">Endpoint подменяется на локальный порт прокси автоматически. Пусто = туннель не поднимается.</string>
+
+    <!-- Split tunneling -->
+    <string name="split_tunnel_title">Раздельное туннелирование</string>
+    <string name="split_tunnel_desc">Какие приложения отправлять в туннель.</string>
+    <string name="split_tunnel_all">Все</string>
+    <string name="split_tunnel_include">Только эти</string>
+    <string name="split_tunnel_exclude">Кроме этих</string>
+    <string name="split_tunnel_pick_apps">Выбрать приложения</string>
+    <string name="split_tunnel_apps_label">Пакеты приложений</string>
+    <string name="split_tunnel_apps_placeholder">com.example.app\ncom.other.app</string>
+    <string name="split_tunnel_apps_support">По одному package-имени в строке (или через запятую).</string>
+    <string name="split_tunnel_pick_title">Выберите приложения</string>
+    <string name="split_tunnel_done">Готово</string>
+
+    <!-- Логи -->
+    <string name="logs_enabled">Сбор логов</string>
+    <string name="logs_enabled_desc">Показывать вывод ядра на экране логов. Выключите для экономии памяти.</string>
 </resources>

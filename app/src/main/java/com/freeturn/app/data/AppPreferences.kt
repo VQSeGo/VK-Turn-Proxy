@@ -50,6 +50,27 @@ object ObfProfile {
     val ALL = listOf(NONE, RTPOPUS)
 }
 
+/**
+ * Транспорт «туннельного приложения» поверх локального прокси. Пока единственный —
+ * WireGuard (GoBackend): поднимает VPN-туннель, чей Endpoint указывает на localPort
+ * прокси, так что трафик устройства идёт через TURN-релей.
+ */
+object TunnelTransport {
+    const val WIREGUARD = "wireguard"
+    val ALL = listOf(WIREGUARD)
+}
+
+/** Режим split-tunneling для WireGuard-интерфейса. */
+object SplitTunnelMode {
+    /** Весь трафик в туннель (только сам прокси исключён). */
+    const val ALL = "all"
+    /** Только перечисленные приложения идут в туннель (IncludedApplications). */
+    const val INCLUDE = "include"
+    /** Перечисленные приложения исключены из туннеля (ExcludedApplications). */
+    const val EXCLUDE = "exclude"
+    val VALUES = listOf(ALL, INCLUDE, EXCLUDE)
+}
+
 data class ClientConfig(
     val serverAddress: String = "",
     val vkLink: String = "",
@@ -83,8 +104,24 @@ data class ClientConfig(
     val syncServerSwitches: Boolean = true,
     val magicSwitch: Boolean = false,
     /** Адрес для флага -turn ядра, если magicSwitch включён. Пусто = не передавать. */
-    val magicTurn: String = ""
-)
+    val magicTurn: String = "",
+    /** Транспорт туннельного приложения (пока только WireGuard). */
+    val tunnelTransport: String = TunnelTransport.WIREGUARD,
+    /** Конфиг WireGuard (.conf). Пусто = WG-туннель не поднимается. */
+    val wireGuardConfig: String = "",
+    /** Имя WG-туннеля для GoBackend. */
+    val wireGuardTunnelName: String = "freeturn-wg",
+    /** Режим split-tunneling: all | include | exclude. */
+    val splitTunnelMode: String = SplitTunnelMode.ALL,
+    /** Список package-имён для include/exclude (разделители: запятая/пробел/перенос строки). */
+    val splitTunnelApps: String = "",
+    /** Сбор логов ядра в UI. false = ProxyServiceState.addLog глотает строки. */
+    val logsEnabled: Boolean = true
+) {
+    /** WG реально активен только если выбран WG-транспорт и задан непустой конфиг. */
+    val wireGuardActive: Boolean
+        get() = tunnelTransport == TunnelTransport.WIREGUARD && wireGuardConfig.isNotBlank()
+}
 
 class AppPreferences(context: Context) {
     private val context = context.applicationContext
@@ -114,6 +151,12 @@ class AppPreferences(context: Context) {
         val CLIENT_SYNC_SERVER = booleanPreferencesKey("client_sync_server")
         val CLIENT_MAGIC_SWITCH = booleanPreferencesKey("client_magic_switch")
         val CLIENT_MAGIC_TURN = stringPreferencesKey("client_magic_turn")
+        val CLIENT_TUNNEL_TRANSPORT = stringPreferencesKey("client_tunnel_transport")
+        val CLIENT_WG_CONFIG = stringPreferencesKey("client_wg_config")
+        val CLIENT_WG_TUNNEL_NAME = stringPreferencesKey("client_wg_tunnel_name")
+        val CLIENT_SPLIT_TUNNEL_MODE = stringPreferencesKey("client_split_tunnel_mode")
+        val CLIENT_SPLIT_TUNNEL_APPS = stringPreferencesKey("client_split_tunnel_apps")
+        val CLIENT_LOGS_ENABLED = booleanPreferencesKey("client_logs_enabled")
         val PROXY_LISTEN = stringPreferencesKey("proxy_listen")
         val PROXY_CONNECT = stringPreferencesKey("proxy_connect")
         val SERVER_OBF_PROFILE = stringPreferencesKey("server_obf_profile")
@@ -181,7 +224,17 @@ class AppPreferences(context: Context) {
                 },
                 syncServerSwitches = prefs[CLIENT_SYNC_SERVER] ?: true,
                 magicSwitch = prefs[CLIENT_MAGIC_SWITCH] ?: false,
-                magicTurn = prefs[CLIENT_MAGIC_TURN] ?: ""
+                magicTurn = prefs[CLIENT_MAGIC_TURN] ?: "",
+                tunnelTransport = (prefs[CLIENT_TUNNEL_TRANSPORT] ?: TunnelTransport.WIREGUARD).let {
+                    if (it in TunnelTransport.ALL) it else TunnelTransport.WIREGUARD
+                },
+                wireGuardConfig = prefs[CLIENT_WG_CONFIG] ?: "",
+                wireGuardTunnelName = (prefs[CLIENT_WG_TUNNEL_NAME] ?: "freeturn-wg").ifBlank { "freeturn-wg" },
+                splitTunnelMode = (prefs[CLIENT_SPLIT_TUNNEL_MODE] ?: SplitTunnelMode.ALL).let {
+                    if (it in SplitTunnelMode.VALUES) it else SplitTunnelMode.ALL
+                },
+                splitTunnelApps = prefs[CLIENT_SPLIT_TUNNEL_APPS] ?: "",
+                logsEnabled = prefs[CLIENT_LOGS_ENABLED] ?: true
             )
         }
 
@@ -301,6 +354,16 @@ class AppPreferences(context: Context) {
             prefs[CLIENT_SYNC_SERVER] = config.syncServerSwitches
             prefs[CLIENT_MAGIC_SWITCH] = config.magicSwitch
             prefs[CLIENT_MAGIC_TURN] = config.magicTurn.trim()
+            prefs[CLIENT_TUNNEL_TRANSPORT] =
+                if (config.tunnelTransport in TunnelTransport.ALL) config.tunnelTransport
+                else TunnelTransport.WIREGUARD
+            prefs[CLIENT_WG_CONFIG] = config.wireGuardConfig.trim()
+            prefs[CLIENT_WG_TUNNEL_NAME] = config.wireGuardTunnelName.trim().ifBlank { "freeturn-wg" }
+            prefs[CLIENT_SPLIT_TUNNEL_MODE] =
+                if (config.splitTunnelMode in SplitTunnelMode.VALUES) config.splitTunnelMode
+                else SplitTunnelMode.ALL
+            prefs[CLIENT_SPLIT_TUNNEL_APPS] = config.splitTunnelApps.trim()
+            prefs[CLIENT_LOGS_ENABLED] = config.logsEnabled
         }
     }
 

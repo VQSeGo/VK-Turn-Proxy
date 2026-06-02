@@ -9,10 +9,11 @@ android {
 
     defaultConfig {
         applicationId = "com.freeturn.app"
-        minSdk = 23
+        // WireGuard GoBackend (com.wireguard.android:tunnel) требует minSdk 24.
+        minSdk = 24
         targetSdk = 36
-        versionCode = 23
-        versionName = "3.0.0-alpha1"
+        versionCode = 24
+        versionName = "3.0.0-alpha2"
     }
 
     packaging {
@@ -39,15 +40,17 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+        // WireGuard tunnel-либа тянет java.time/desugar-зависимый код — нужно desugaring.
+        isCoreLibraryDesugaringEnabled = true
     }
     compileSdkMinor = 1
 }
 
 kotlin {
     compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 
@@ -57,6 +60,7 @@ dependencies {
     implementation(libs.bouncycastle)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.security.crypto)
+    implementation(libs.wireguard.tunnel)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
@@ -75,4 +79,5 @@ dependencies {
 
     debugImplementation(libs.androidx.compose.ui.tooling)
     implementation(libs.koin.androidx.compose)
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
 }

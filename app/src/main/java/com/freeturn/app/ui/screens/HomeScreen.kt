@@ -59,6 +59,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.VpnService
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
@@ -163,6 +164,26 @@ fun HomeScreen(
     val bottomSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val profilesSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val snackbarHostState = remember { SnackbarHostState() }
+    // WireGuard-туннелю нужно согласие пользователя на VPN. После выдачи —
+    // запускаем прокси (а ProxyService уже поднимет WG поверх него).
+    val wireGuardPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (VpnService.prepare(context) == null) {
+            proxyViewModel.startProxy()
+        }
+    }
+
+    fun startProxyWithTunnel() {
+        if (clientConfig.wireGuardActive) {
+            val vpnIntent = VpnService.prepare(context)
+            if (vpnIntent != null) {
+                wireGuardPermissionLauncher.launch(vpnIntent)
+                return
+            }
+        }
+        proxyViewModel.startProxy()
+    }
 
     Scaffold(
         topBar = {
@@ -203,7 +224,7 @@ fun HomeScreen(
                     when (proxyState) {
                         is ProxyState.Idle, is ProxyState.Error -> {
                             HapticUtil.perform(context, HapticUtil.Pattern.TOGGLE_ON)
-                            proxyViewModel.startProxy()
+                            startProxyWithTunnel()
                         }
                         is ProxyState.Running, is ProxyState.Connecting, is ProxyState.Starting -> {
                             HapticUtil.perform(context, HapticUtil.Pattern.TOGGLE_OFF)
@@ -274,6 +295,12 @@ fun HomeScreen(
                             else stringResource(R.string.tcp)
                         )
                         ConfigRow(stringResource(R.string.local_port), clientConfig.localPort.redact(privacyMode))
+                        if (clientConfig.wireGuardActive) {
+                            ConfigRow(
+                                stringResource(R.string.tunnel_transport_title),
+                                stringResource(R.string.transport_wireguard)
+                            )
+                        }
                     }
                 }
 
