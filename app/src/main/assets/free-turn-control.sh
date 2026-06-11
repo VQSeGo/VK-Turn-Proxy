@@ -21,7 +21,7 @@ ENVFILE="$PREFIX/run.env"
 LAUNCHER="$PREFIX/launch.sh"
 UNIT_PATH="/etc/systemd/system/free-turn-proxy.service"
 UNIT_NAME="free-turn-proxy.service"
-BASE_URL="https://github.com/samosvalishe/free-turn-proxy/releases/latest/download"
+BASE_URL="https://github.com/VQSeGo/VK-Turn-Proxy/releases/latest/download"
 
 log()  { echo "LOG: $*"; }
 emit() { echo "$1=$2"; }

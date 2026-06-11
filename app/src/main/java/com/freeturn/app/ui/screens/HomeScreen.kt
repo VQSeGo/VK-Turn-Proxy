@@ -5,7 +5,12 @@
 
 package com.freeturn.app.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -16,13 +21,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -31,10 +36,17 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import com.freeturn.app.R
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularWavyProgressIndicator
+import androidx.compose.material3.LoadingIndicator
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.shadow
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,18 +55,21 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemColors
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.SheetValue
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberBottomSheetScaffoldState
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.material3.rememberStandardBottomSheetState
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
@@ -79,23 +94,27 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import com.freeturn.app.data.SplitTunnelMode
 import com.freeturn.app.ui.HapticUtil
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import com.freeturn.app.ui.theme.extendedColorScheme
 import com.freeturn.app.viewmodel.ProxyState
 import com.freeturn.app.viewmodel.UpdateState
 import com.freeturn.app.viewmodel.SettingsViewModel
 import com.freeturn.app.viewmodel.ProxyViewModel
-
 import androidx.core.net.toUri
 
 @SuppressLint("BatteryLife")
@@ -105,6 +124,8 @@ fun HomeScreen(
     proxyViewModel: ProxyViewModel
 ) {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
+    val clipboardManager = LocalClipboardManager.current
     val proxyState by proxyViewModel.proxyState.collectAsStateWithLifecycle()
     val connectedSince by proxyViewModel.connectedSince.collectAsStateWithLifecycle()
     val uptimeText = rememberProxyUptime(connectedSince)
@@ -114,6 +135,14 @@ fun HomeScreen(
     val batteryOptLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { /* пользователь закрыл диалог батареи — результат нас не интересует */ }
+
+    val vpnPrepareLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            proxyViewModel.startProxy()
+        }
+    }
 
     val notificationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -151,63 +180,83 @@ fun HomeScreen(
         }
     }
 
-    val privacyMode by settingsViewModel.privacyMode.collectAsStateWithLifecycle()
     val profilesSnapshot by settingsViewModel.profilesSnapshot.collectAsStateWithLifecycle()
     val showBottomSheet = rememberSaveable { mutableStateOf(false) }
-    val showSplitSheet = rememberSaveable { mutableStateOf(false) }
+    val showProfilesSheet = rememberSaveable { mutableStateOf(false) }
     val bottomSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val splitSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val profilesSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
-    // Standard bottom sheet: свёрнутый peek = карточка активного профиля,
-    // тянется вверх до полного списка серверов. skipHiddenState — sheet всегда
-    // виден, не прячется полностью.
-    val sheetScaffoldState = rememberBottomSheetScaffoldState(
-        bottomSheetState = rememberStandardBottomSheetState(
-            initialValue = SheetValue.PartiallyExpanded,
-            skipHiddenState = true
-        )
-    )
-    // WireGuard-туннелю нужно согласие пользователя на VPN. После выдачи —
-    // запускаем прокси (а ProxyService уже поднимет WG поверх него).
-    val wireGuardPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) {
-        if (VpnService.prepare(context) == null) {
-            proxyViewModel.startProxy()
-        }
-    }
+    val coroutineScope = rememberCoroutineScope()
+    var isRefreshing by remember { mutableStateOf(false) }
+    var devClickCount by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    val devMode by settingsViewModel.devMode.collectAsStateWithLifecycle()
+    var longPressed by remember { mutableStateOf(false) }
 
-    fun startProxyWithTunnel() {
-        if (clientConfig.wireGuardActive) {
-            val vpnIntent = VpnService.prepare(context)
-            if (vpnIntent != null) {
-                wireGuardPermissionLauncher.launch(vpnIntent)
-                return
+    var connectionTimer by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    LaunchedEffect(proxyState) {
+        if (proxyState is ProxyState.Starting || proxyState is ProxyState.Connecting) {
+            connectionTimer = 0
+            while (true) {
+                delay(1000)
+                connectionTimer++
             }
+        } else {
+            connectionTimer = 0
         }
-        proxyViewModel.startProxy()
     }
 
-    val sheetColor = MaterialTheme.colorScheme.surfaceContainerLow
-    BottomSheetScaffold(
-        scaffoldState = sheetScaffoldState,
-        sheetPeekHeight = 112.dp,
-        sheetContainerColor = sheetColor,
-        sheetContent = {
-            ProfilesSheetContent(
-                settingsViewModel = settingsViewModel,
-                snapshot = profilesSnapshot,
-                privacyMode = privacyMode,
-                onCollapse = {
-                    scope.launch { sheetScaffoldState.bottomSheetState.partialExpand() }
-                }
-            )
-        },
+    Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.turn_proxy_title)) },
+                title = {
+                    var pressStart by remember { androidx.compose.runtime.mutableLongStateOf(0L) }
+                    Text(
+                        text = stringResource(R.string.turn_proxy_title),
+                        modifier = Modifier.pointerInput(devMode) {
+                            if (!devMode) {
+                                awaitPointerEventScope {
+                                    while (true) {
+                                        val down = awaitFirstDown()
+                                        pressStart = System.currentTimeMillis()
+                                        val up = waitForUpOrCancellation()
+                                        if (up != null) {
+                                            val duration = System.currentTimeMillis() - pressStart
+                                            if (duration >= 2000) {
+                                                if (!devMode && !longPressed) {
+                                                    longPressed = true
+                                                    HapticUtil.perform(context, HapticUtil.Pattern.TOGGLE_ON)
+                                                }
+                                            } else {
+                                                if (!devMode && longPressed) {
+                                                    devClickCount++
+                                                    if (devClickCount >= 10) {
+                                                        settingsViewModel.setDevMode(true)
+                                                        HapticUtil.perform(context, HapticUtil.Pattern.TOGGLE_ON)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    )
+                },
                 actions = {
+                    IconButton(onClick = {
+                        HapticUtil.perform(context, HapticUtil.Pattern.CLICK)
+                        coroutineScope.launch {
+                            val result = proxyViewModel.fetchAndDecryptConfig()
+                            if (result.isSuccess) {
+                                snackbarHostState.showSnackbar("Конфигурация успешно обновлена")
+                            } else {
+                                val err = result.exceptionOrNull()?.message ?: "Ошибка обновления"
+                                snackbarHostState.showSnackbar("Ошибка: $err")
+                            }
+                        }
+                    }) {
+                        Icon(painterResource(R.drawable.refresh_24px), contentDescription = "Обновить конфигурацию")
+                    }
                     IconButton(onClick = {
                         HapticUtil.perform(context, HapticUtil.Pattern.CLICK)
                         showBottomSheet.value = true
@@ -219,104 +268,152 @@ fun HomeScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-        Column(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .widthIn(max = 840.dp)
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+        Box(modifier = Modifier
+            .fillMaxSize()
+            .padding(padding)
+            .clickable(
+                indication = null,
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+            ) { focusManager.clearFocus() }
         ) {
-            ProxyToggleButton(
-                state = proxyState,
-                onClick = {
-                    when (proxyState) {
-                        is ProxyState.Idle, is ProxyState.Error -> {
-                            HapticUtil.perform(context, HapticUtil.Pattern.TOGGLE_ON)
-                            startProxyWithTunnel()
+            val pullToRefreshState = rememberPullToRefreshState()
+            PullToRefreshBox(
+                state = pullToRefreshState,
+                isRefreshing = isRefreshing,
+                onRefresh = {
+                    isRefreshing = true
+                    coroutineScope.launch {
+                        val result = proxyViewModel.fetchAndDecryptConfig()
+                        isRefreshing = false
+                        if (result.isSuccess) {
+                            snackbarHostState.showSnackbar("Конфигурация успешно обновлена")
+                        } else {
+                            val err = result.exceptionOrNull()?.message ?: "Ошибка обновления"
+                            snackbarHostState.showSnackbar("Ошибка: $err")
                         }
-                        is ProxyState.Running, is ProxyState.Connecting, is ProxyState.Starting -> {
-                            HapticUtil.perform(context, HapticUtil.Pattern.TOGGLE_OFF)
-                            proxyViewModel.stopProxy()
+                    }
+                },
+                indicator = {
+                    PullToRefreshDefaults.LoadingIndicator(
+                        state = pullToRefreshState,
+                        isRefreshing = isRefreshing,
+                        modifier = Modifier.align(Alignment.TopCenter)
+                    )
+                },
+                modifier = Modifier.fillMaxSize()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .widthIn(max = 840.dp)
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState()),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    ProxyToggleButton(
+                        state = proxyState,
+                        onClick = {
+                            when (proxyState) {
+                                is ProxyState.Idle, is ProxyState.Error -> {
+                                    HapticUtil.perform(context, HapticUtil.Pattern.TOGGLE_ON)
+                                    val cm = context.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+                                    val isWifi = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                                        val activeNetwork = cm.activeNetwork
+                                        val capabilities = cm.getNetworkCapabilities(activeNetwork)
+                                        capabilities?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) ?: false
+                                    } else {
+                                        @Suppress("DEPRECATION")
+                                        cm.activeNetworkInfo?.type == android.net.ConnectivityManager.TYPE_WIFI
+                                    }
+
+                                    if (isWifi) {
+                                        proxyViewModel.startProxy()
+                                    } else {
+                                        val intent = VpnService.prepare(context)
+                                        if (intent != null) {
+                                            vpnPrepareLauncher.launch(intent)
+                                        } else {
+                                            proxyViewModel.startProxy()
+                                        }
+                                    }
+                                }
+                                is ProxyState.Running, is ProxyState.Connecting, is ProxyState.Starting -> {
+                                    HapticUtil.perform(context, HapticUtil.Pattern.TOGGLE_OFF)
+                                    proxyViewModel.stopProxy()
+                                }
+                                else -> {}
+                            }
                         }
-                        else -> {}
-                    }
+                    )
+
+                    Spacer(Modifier.height(24.dp))
+
+                    Text(
+                        text = when (val s = proxyState) {
+                            is ProxyState.Running -> {
+                                val base = stringResource(R.string.proxy_active)
+                                val counts = if (s.total > 0) "${s.active}/${s.total}" else "${s.active}"
+                                if (uptimeText != null) "$base — $counts · $uptimeText"
+                                else "$base — $counts"
+                            }
+                            is ProxyState.Connecting -> {
+                                val counts = if (s.total > 0) " (${s.active}/${s.total})" else ""
+                                val stageText = when {
+                                    connectionTimer < 2 -> "Запуск ядра прокси..."
+                                    connectionTimer < 4 -> "Подключение к серверу..."
+                                    connectionTimer < 6 -> "Проверка авторизации..."
+                                    connectionTimer < 9 -> "Создание туннелей smux..."
+                                    connectionTimer < 12 -> "Настройка сетевых маршрутов..."
+                                    else -> "Обычно это не занимает много времени..."
+                                }
+                                "$stageText$counts"
+                            }
+                            is ProxyState.Starting -> {
+                                when {
+                                    connectionTimer < 2 -> "Запуск ядра прокси..."
+                                    connectionTimer < 4 -> "Подключение к серверу..."
+                                    connectionTimer < 6 -> "Проверка авторизации..."
+                                    connectionTimer < 9 -> "Создание туннелей smux..."
+                                    connectionTimer < 12 -> "Настройка сетевых маршрутов..."
+                                    else -> "Обычно это не занимает много времени..."
+                                }
+                            }
+                            is ProxyState.Error -> s.message
+                            is ProxyState.CaptchaRequired -> stringResource(R.string.proxy_captcha_required)
+                            else -> stringResource(R.string.proxy_press_to_start)
+                        },
+                        style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
+                        color = when (proxyState) {
+                            is ProxyState.Running -> MaterialTheme.extendedColorScheme.success
+                            is ProxyState.Error -> MaterialTheme.colorScheme.error
+                            is ProxyState.CaptchaRequired -> MaterialTheme.colorScheme.error
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        textAlign = TextAlign.Center
+                    )
+
+                    Spacer(Modifier.height(100.dp))
                 }
-            )
+            }
 
-            Spacer(Modifier.height(24.dp))
-
-            Text(
-                text = when (val s = proxyState) {
-                    is ProxyState.Running -> {
-                        val base = stringResource(R.string.proxy_active)
-                        val counts = if (s.total > 0) "${s.active}/${s.total}" else "${s.active}"
-                        if (uptimeText != null) "$base — $counts · $uptimeText"
-                        else "$base — $counts"
-                    }
-                    is ProxyState.Connecting -> {
-                        val base = stringResource(R.string.proxy_connecting)
-                        val counts = if (s.total > 0) " — ${s.active}/${s.total}" else ""
-                        // Таймер всё ещё показываем: сессия не завершилась, просто
-                        // потоки временно отвалились и ядро переподключается.
-                        if (uptimeText != null) "$base$counts · $uptimeText" else "$base$counts"
-                    }
-                    is ProxyState.Starting -> stringResource(R.string.proxy_connecting)
-                    is ProxyState.Error -> s.message
-                    is ProxyState.CaptchaRequired -> stringResource(R.string.proxy_captcha_required)
-                    else -> stringResource(R.string.proxy_press_to_start)
-                },
-                // "tnum" — tabular numbers: все цифры одинаковой ширины. Без него
-                // тикающий таймер и меняющийся счётчик N/M сдвигают остальной текст.
-                style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
-                color = when (proxyState) {
-                    is ProxyState.Running -> MaterialTheme.extendedColorScheme.success
-                    is ProxyState.Error -> MaterialTheme.colorScheme.error
-                    is ProxyState.CaptchaRequired -> MaterialTheme.colorScheme.error
-                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                textAlign = TextAlign.Center
-            )
-        }
-
-        // Ссылка-индикатор split-tunneling прямо над свёрнутым листом сервера.
-        // Только в WG-режиме: без конфига WireGuard (proxy-режим) сплит не работает.
-        if (clientConfig.wireGuardActive) {
-        Row(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 12.dp)
-                .clip(MaterialTheme.shapes.large)
-                .clickable {
-                    HapticUtil.perform(context, HapticUtil.Pattern.CLICK)
-                    showSplitSheet.value = true
-                }
-                .heightIn(min = 48.dp)
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Text(
-                text = if (clientConfig.splitTunnelMode == SplitTunnelMode.ALL)
-                    stringResource(R.string.split_tunnel_status_off)
-                else stringResource(R.string.split_tunnel_status_on),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Icon(
-                painterResource(R.drawable.unfold_more_24px),
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        }
+            if (profilesSnapshot.active != null) {
+                ActiveProfileBar(
+                    snapshot = profilesSnapshot,
+                    onSwitch = {
+                        HapticUtil.perform(context, HapticUtil.Pattern.CLICK)
+                        showProfilesSheet.value = true
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(start = 24.dp, end = 24.dp, bottom = 16.dp)
+                )
+            }
         }
     }
 
     if (showBottomSheet.value) {
+        val sheetColor = MaterialTheme.colorScheme.surfaceContainerLow
         ModalBottomSheet(
             onDismissRequest = { showBottomSheet.value = false },
             sheetState = bottomSheetState,
@@ -324,27 +421,23 @@ fun HomeScreen(
         ) {
             InfoBottomSheet(
                 settingsViewModel = settingsViewModel,
-                containerColor = sheetColor,
-                privacyMode = privacyMode,
-                onPrivacyModeChange = { settingsViewModel.setPrivacyMode(it) }
+                containerColor = sheetColor
             )
         }
     }
 
-    if (showSplitSheet.value) {
+    if (showProfilesSheet.value) {
+        val sheetColor = MaterialTheme.colorScheme.surfaceContainerLow
         ModalBottomSheet(
-            onDismissRequest = { showSplitSheet.value = false },
-            sheetState = splitSheetState,
-            containerColor = sheetColor,
-            // Не поднимаем контент над клавиатурой — иначе высокий лист «вырастает»
-            // на весь экран при фокусе поиска. Свои инсеты лист держит сам.
-            contentWindowInsets = { WindowInsets(0, 0, 0, 0) }
+            onDismissRequest = { showProfilesSheet.value = false },
+            sheetState = profilesSheetState,
+            containerColor = sheetColor
         ) {
-            SplitTunnelSheetContent(
+            ProfilesSheetContent(
                 settingsViewModel = settingsViewModel,
-                mode = clientConfig.splitTunnelMode,
-                apps = clientConfig.splitTunnelApps,
-                locked = proxyState !is ProxyState.Idle && proxyState !is ProxyState.Error
+                snapshot = profilesSnapshot,
+                containerColor = sheetColor,
+                onClose = { showProfilesSheet.value = false }
             )
         }
     }
@@ -483,7 +576,7 @@ private fun ProxyToggleButton(state: ProxyState, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
         modifier = Modifier
-            .size(148.dp)
+            .size(176.dp)
             .scale(scale)
             .clip(CircleShape)
             .semantics { contentDescription = buttonLabel },
@@ -498,18 +591,21 @@ private fun ProxyToggleButton(state: ProxyState, onClick: () -> Unit) {
         ) {
             when (state) {
                 is ProxyState.Starting, is ProxyState.Connecting ->
-                    CircularWavyProgressIndicator(color = contentColor)
+                    LoadingIndicator(
+                        color = contentColor,
+                        modifier = Modifier.size(60.dp)
+                    )
                 is ProxyState.Running -> Icon(
                     painterResource(R.drawable.check_circle_24px), stringResource(R.string.proxy_active_stop),
-                    Modifier.size(52.dp), tint = contentColor
+                    Modifier.size(60.dp), tint = contentColor
                 )
                 is ProxyState.Error -> Icon(
                     painterResource(R.drawable.error_24px), stringResource(R.string.proxy_error_restart),
-                    Modifier.size(52.dp), tint = contentColor
+                    Modifier.size(60.dp), tint = contentColor
                 )
                 else -> Icon(
                     painterResource(R.drawable.play_arrow_24px), stringResource(R.string.start_proxy),
-                    Modifier.size(52.dp), tint = contentColor
+                    Modifier.size(60.dp), tint = contentColor
                 )
             }
         }
@@ -518,18 +614,16 @@ private fun ProxyToggleButton(state: ProxyState, onClick: () -> Unit) {
 
 // Bottom sheet
 
+@Suppress("AssignedValueIsNeverRead")
 @Composable
 private fun InfoBottomSheet(
     settingsViewModel: SettingsViewModel,
     containerColor: Color,
-    privacyMode: Boolean,
-    onPrivacyModeChange: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
     val dynamicTheme by settingsViewModel.dynamicTheme.collectAsStateWithLifecycle()
     val updateState by settingsViewModel.updateState.collectAsStateWithLifecycle()
-    var showResetDialog by rememberSaveable { mutableStateOf(false) }
 
     val appVersion = remember {
         try { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "—" }
@@ -569,8 +663,8 @@ private fun InfoBottomSheet(
         item {
             RepoLinkItem(
                 title = stringResource(R.string.android_client),
-                subtitle = "samosvalishe/turn-proxy-android",
-                url = "https://github.com/samosvalishe/turn-proxy-android",
+                subtitle = "VQSeGo/VK-Turn-Proxy",
+                url = "https://github.com/VQSeGo/VK-Turn-Proxy",
                 containerColor = containerColor,
                 onHaptic = { HapticUtil.perform(context, HapticUtil.Pattern.SELECTION) },
                 onOpen = { uriHandler.openUri(it) }
@@ -590,9 +684,20 @@ private fun InfoBottomSheet(
 
         item {
             RepoLinkItem(
-                title = stringResource(R.string.tg_channel),
-                subtitle = null,
-                url = "https://t.me/+53nh4UNiSv5lNTgy",
+                title = stringResource(R.string.tg_bot),
+                subtitle = "@torvaldsvpnbot",
+                url = "https://t.me/torvaldsvpnbot",
+                containerColor = containerColor,
+                onHaptic = { HapticUtil.perform(context, HapticUtil.Pattern.SELECTION) },
+                onOpen = { uriHandler.openUri(it) }
+            )
+        }
+
+        item {
+            RepoLinkItem(
+                title = stringResource(R.string.tg_support),
+                subtitle = "@torvalds_support_bot",
+                url = "https://t.me/torvalds_support_bot",
                 containerColor = containerColor,
                 onHaptic = { HapticUtil.perform(context, HapticUtil.Pattern.SELECTION) },
                 onOpen = { uriHandler.openUri(it) }
@@ -602,26 +707,6 @@ private fun InfoBottomSheet(
         item { HorizontalDivider() }
 
         // Настройки интерфейса
-        item {
-            ListItem(
-                headlineContent = { Text(stringResource(R.string.privacy_mode_title)) },
-                supportingContent = { Text(stringResource(R.string.privacy_mode_desc)) },
-                colors = listColors,
-                trailingContent = {
-                    androidx.compose.material3.Switch(
-                        checked = privacyMode,
-                        onCheckedChange = {
-                            HapticUtil.perform(
-                                context,
-                                if (it) HapticUtil.Pattern.TOGGLE_ON else HapticUtil.Pattern.TOGGLE_OFF
-                            )
-                            onPrivacyModeChange(it)
-                        }
-                    )
-                }
-            )
-        }
-
         item {
             ListItem(
                 headlineContent = { Text(stringResource(R.string.dynamic_theme_title)) },
@@ -644,29 +729,15 @@ private fun InfoBottomSheet(
 
         item { HorizontalDivider() }
 
-        // Сброс
         item {
-            ListItem(
-                headlineContent = {
-                    Text(
-                        stringResource(R.string.reset_settings),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                },
-                colors = listColors,
-                trailingContent = {
-                    Icon(
-                        painterResource(R.drawable.delete_24px),
-                        contentDescription = stringResource(R.string.reset),
-                        modifier = Modifier.size(20.dp),
-                        tint = MaterialTheme.colorScheme.error
-                    )
-                },
-                modifier = Modifier.clickable {
-                    HapticUtil.perform(context, HapticUtil.Pattern.CLICK)
-                    showResetDialog = true
-                }
+            Text(
+                text = stringResource(R.string.app_description),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
 
@@ -681,28 +752,6 @@ private fun InfoBottomSheet(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-    }
-
-    if (showResetDialog) {
-        AlertDialog(
-            onDismissRequest = { showResetDialog = false },
-            title = { Text(stringResource(R.string.reset_all_settings_title)) },
-            text = { Text(stringResource(R.string.reset_all_settings_desc)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showResetDialog = false
-                        settingsViewModel.resetAllSettings()
-                    },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    )
-                ) { Text(stringResource(R.string.reset)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showResetDialog = false }) { Text(stringResource(R.string.cancel)) }
-            }
-        )
     }
 }
 
@@ -806,29 +855,74 @@ private fun RepoLinkItem(
     }
 }
 
-
 /**
  * Прилипшая к низу M3 «карточка» — единственная точка входа в управление профилями.
- * Виден всегда: с сохранённым активным профилем показывает его имя, без — лейбл
- * «несохранённая конфигурация» с приглашением открыть sheet.
  */
+@Composable
+private fun ActiveProfileBar(
+    snapshot: com.freeturn.app.data.ProfilesSnapshot,
+    onSwitch: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val active = snapshot.active
+    val title: String = active?.name ?: stringResource(R.string.profile_unsaved_label)
+    val subtitle: String? = if (active != null) stringResource(R.string.profile_active_label) else null
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .navigationBarsPadding(),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 3.dp,
+        onClick = onSwitch
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(
+                    painterResource(R.drawable.manage_accounts_24px),
+                    contentDescription = null,
+                    tint = if (active != null) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Column {
+                    if (subtitle != null) {
+                        Text(
+                            subtitle,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                }
+            }
+            Icon(
+                painterResource(R.drawable.arrow_forward_24px),
+                contentDescription = stringResource(R.string.profile_switch_action),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
 internal fun String.redact(enabled: Boolean) = if (enabled) "••••••" else this
 
-/**
- * Форматирует uptime прокси в «mm:ss» или «h:mm:ss», тикая раз в секунду.
- *
- * Источник времени — `SystemClock.elapsedRealtime()`, как и у `connectedSince`
- * в `ProxyServiceState`: это устойчиво к переводу системных часов (обычный
- * `System.currentTimeMillis()` при изменении времени показал бы отрицательные
- * или разорванные интервалы).
- *
- * Возвращает null, если прокси ни разу не подключался в текущей сессии.
- */
 @Composable
 private fun rememberProxyUptime(connectedSince: Long?): String? {
     if (connectedSince == null) return null
-    // Тик состояния, принудительно переформатирующий строку раз в секунду.
-    // Пересоздаётся при смене connectedSince (новая сессия).
     val tick = androidx.compose.runtime.produceState(initialValue = 0L, connectedSince) {
         while (true) {
             value = android.os.SystemClock.elapsedRealtime()
@@ -840,10 +934,5 @@ private fun rememberProxyUptime(connectedSince: Long?): String? {
     val h = totalSec / 3600
     val m = (totalSec % 3600) / 60
     val s = totalSec % 60
-    // Ведущий ноль у минут, чтобы строка не прыгала при переходе 9:59 → 10:00.
-    // Вместе с fontFeatureSettings="tnum" у Text это даёт полностью стабильную
-    // ширину в первый час работы. Смена ширины остаётся только на переходе
-    // 59:59 → 1:00:00 (раз за сессию) и 9:59:59 → 10:00:00.
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
 }
-

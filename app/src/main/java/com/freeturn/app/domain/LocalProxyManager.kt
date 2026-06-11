@@ -37,10 +37,7 @@ class LocalProxyManager(private val context: Context) {
 
     init {
         scope.launch { observeProxyLifecycle() }
-        scope.launch { observeProxyServiceStatus() }
-        scope.launch { observeConnectionStats() }
-        scope.launch { observeCaptchaEvents() }
-        syncInitialState()
+        scope.launch { observeCombinedState() }
     }
 
     private suspend fun observeProxyLifecycle() {
@@ -49,82 +46,47 @@ class LocalProxyManager(private val context: Context) {
         }
     }
 
-    private suspend fun observeCaptchaEvents() {
-        ProxyServiceState.captchaSession.collect { session ->
-            if (session != null) {
-                _proxyState.value = ProxyState.CaptchaRequired(session.url, session.sessionId)
-            } else if (_proxyState.value is ProxyState.CaptchaRequired) {
-                val s = ProxyServiceState.connectionStats.value
-                _proxyState.value = if (s.active > 0) {
-                    ProxyState.Running(s.active, s.total)
+    private suspend fun observeCombinedState() {
+        combine(
+            ProxyServiceState.isRunning,
+            ProxyServiceState.connectionStats,
+            ProxyServiceState.captchaSession
+        ) { running, stats, captcha ->
+            Triple(running, stats, captcha)
+        }.collect { (running, stats, captcha) ->
+            val current = _proxyState.value
+            if (current is ProxyState.Error && !running) {
+                return@collect
+            }
+
+            if (!running) {
+                _proxyState.value = ProxyState.Idle
+            } else if (captcha != null) {
+                _proxyState.value = ProxyState.CaptchaRequired(captcha.url, captcha.sessionId)
+            } else {
+                if (stats.active > 0) {
+                    _proxyState.value = ProxyState.Running(stats.active, stats.total)
                 } else {
-                    ProxyState.Connecting(s.active, s.total)
+                    if (current is ProxyState.Starting) {
+                        // Keep Starting
+                    } else if (current is ProxyState.CaptchaRequired) {
+                        _proxyState.value = ProxyState.Connecting(stats.active, stats.total)
+                    } else if (current is ProxyState.Idle) {
+                        _proxyState.value = ProxyState.Starting
+                    } else {
+                        _proxyState.value = ProxyState.Connecting(stats.active, stats.total)
+                    }
                 }
             }
         }
     }
 
-    private suspend fun observeProxyServiceStatus() {
-        ProxyServiceState.isRunning.collect { running ->
-            val current = _proxyState.value
-            if (running) {
-                if (current !is ProxyState.Running &&
-                    current !is ProxyState.Connecting &&
-                    current !is ProxyState.Starting) {
-                    _proxyState.value = ProxyState.Starting
-                }
-            } else {
-                if (current is ProxyState.Running ||
-                    current is ProxyState.Connecting ||
-                    current is ProxyState.Starting ||
-                    current is ProxyState.CaptchaRequired) {
-                    _proxyState.value = ProxyState.Idle
-                }
-            }
-        }
-    }
-
-    /**
-     * Переводит UI в Connecting/Running в зависимости от числа активных каналов.
-     * - active == 0 + процесс жив → жёлтый (Connecting).
-     * - active  > 0               → зелёный (Running).
-     *
-     * Captcha и Error имеют приоритет и не перезаписываются, пока активны.
-     * Starting тоже не трогаем: он снимается StartupResult-логикой в startProxy.
-     */
-    private suspend fun observeConnectionStats() {
-        ProxyServiceState.connectionStats.collect { stats ->
-            val current = _proxyState.value
-            if (current is ProxyState.Error || current is ProxyState.CaptchaRequired) return@collect
-            if (!ProxyServiceState.isRunning.value) return@collect
-
-            val next: ProxyState = if (stats.active > 0) {
-                ProxyState.Running(stats.active, stats.total)
-            } else {
-                ProxyState.Connecting(stats.active, stats.total)
-            }
-
-            if (current is ProxyState.Starting && stats.active == 0) return@collect
-            _proxyState.value = next
-        }
-    }
-
-    private fun syncInitialState() {
-        if (ProxyServiceState.isRunning.value) {
-            val s = ProxyServiceState.connectionStats.value
-            _proxyState.value = if (s.active > 0) {
-                ProxyState.Running(s.active, s.total)
-            } else {
-                ProxyState.Connecting(s.active, s.total)
-            }
-        }
-    }
-
-    suspend fun startProxy(cfg: ClientConfig) {
+    suspend fun startProxy(cfg: ClientConfig, coreOnly: Boolean = false) {
         if (ProxyServiceState.isRunning.value) return
         if (_proxyState.value is ProxyState.Error) _proxyState.value = ProxyState.Idle
 
-        if (!cfg.isRawMode && (cfg.serverAddress.isBlank() || cfg.vkLink.isBlank())) {
+        val activeLink = if (cfg.useCustomVkLink) cfg.vkLink else cfg.systemVkLink
+        if (!cfg.isRawMode && (cfg.serverAddress.isBlank() || activeLink.isBlank())) {
             setErrorWithAutoReset("Не заполнены настройки клиента")
             return
         }
@@ -139,7 +101,11 @@ class LocalProxyManager(private val context: Context) {
         ProxyServiceState.setStartupResult(null)
         ProxyServiceState.setConnectionStats(ConnectionStats.IDLE)
         ProxyServiceState.clearConnectedSince()
-        val intent = Intent(context, ProxyService::class.java)
+        val intent = Intent(context, ProxyService::class.java).apply {
+            if (coreOnly) {
+                putExtra(ProxyService.EXTRA_CORE_ONLY, true)
+            }
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent)
         } else {
@@ -192,22 +158,20 @@ class LocalProxyManager(private val context: Context) {
 
     fun dismissCaptcha() {
         ProxyServiceState.setCaptchaSession(null)
-        if (_proxyState.value is ProxyState.CaptchaRequired) {
-            val s = ProxyServiceState.connectionStats.value
-            _proxyState.value = if (s.active > 0) {
-                ProxyState.Running(s.active, s.total)
-            } else {
-                ProxyState.Connecting(s.active, s.total)
-            }
-        }
     }
 
     fun setErrorWithAutoReset(message: String) {
-        resetJob?.cancel()
-        _proxyState.value = ProxyState.Error(message)
-        resetJob = scope.launch {
-            delay(4_000)
-            if (_proxyState.value is ProxyState.Error) _proxyState.value = ProxyState.Idle
+        synchronized(this) {
+            resetJob?.cancel()
+            _proxyState.value = ProxyState.Error(message)
+            resetJob = scope.launch(Dispatchers.Main) {
+                delay(4_000)
+                synchronized(this@LocalProxyManager) {
+                    if (_proxyState.value is ProxyState.Error) {
+                        _proxyState.value = ProxyState.Idle
+                    }
+                }
+            }
         }
     }
 

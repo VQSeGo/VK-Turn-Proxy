@@ -3,7 +3,7 @@
 
     <!-- HomeScreen -->
     <string name="nav_home">Главная</string>
-    <string name="turn_proxy_title">Free Turn</string>
+    <string name="turn_proxy_title">Turn Proxy</string>
     <string name="info_desc">Информация</string>
     <string name="proxy_active">Прокси активен</string>
     <string name="proxy_connecting">Подключение…</string>
@@ -141,8 +141,8 @@
     <string name="step_ssh_check">Проверка SSH…</string>
 
     <!-- OnboardingScreen -->
-    <string name="onboarding_title">Free Turn</string>
-    <string name="onboarding_subtitle">Проксируйте WireGuard/Xray трафик\nчерез TURN‑сервера</string>
+    <string name="onboarding_title">Turn Proxy</string>
+    <string name="onboarding_subtitle">Проксируйте WireGuard и Hysteria‑трафик\nчерез TURN‑серверы VK Calls</string>
     <string name="privacy_notice">Мы не собираем никаких данных. Все настройки (SSH-доступ, параметры прокси) хранятся исключительно на вашем устройстве.</string>
     <string name="setup_server">Настроить сервер</string>
     <string name="skip_setup">Пропустить настройки</string>
@@ -178,7 +178,7 @@
     <string name="privacy_mode_desc">Скрывает IP и порты</string>
 
     <!-- Notifications -->
-    <string name="notif_proxy_title">FreeTurn</string>
+    <string name="notif_proxy_title">Turn Proxy</string>
     <string name="notif_proxy_connecting">Подключение…</string>
     <string name="notif_channel_proxy">Прокси</string>
     <string name="notif_channel_captcha">Капча</string>
@@ -196,6 +196,9 @@
     <string name="tg_subscribe_desc">Подпишитесь на Telegram-канал, чтобы узнавать о новых версиях и изменениях первыми.</string>
     <string name="tg_subscribe_btn">Подписаться</string>
     <string name="tg_not_now">Не сейчас</string>
+    <string name="tg_bot">Telegram Torvalds VPN</string>
+    <string name="tg_support">Поддержка</string>
+    <string name="app_description">VK Turn Proxy от Torvalds VPN\n\nПриложение предназначено для обхода белых списков с использованием технологии передачи данных через Turn серверы VK</string>
 
     <!-- Profiles -->
     <string name="profiles_title">Профили</string>
@@ -215,12 +218,19 @@
     <string name="profile_name_taken">Профиль с таким именем уже существует</string>
     <string name="profile_unsaved_label">Несохранённая конфигурация</string>
     <string name="profile_update_current">Обновить активный профиль</string>
+    <string name="profile_update_current_hint">Перезаписать текущими настройками</string>
+    <string name="profile_save_current_hint">Создаст новый профиль с текущими SSH и клиентскими настройками</string>
+    <string name="profile_section_saved">Сохранённые профили</string>
+    <string name="profile_active">Активен</string>
+    <string name="profile_active_label">Активный профиль</string>
+    <string name="profile_switch_action">Сменить</string>
     <string name="profile_updated_toast">Профиль обновлён</string>
+    <string name="settings_title">Настройки</string>
 
     <!-- Notification & Tile -->
     <string name="notif_proxy_stop_action">Отключить</string>
     <string name="notif_proxy_status_format">Потоки: %1$d/%2$d • %3$s</string>
-    <string name="tile_service_label">Free Turn</string>
+    <string name="tile_service_label">Turn Proxy</string>
     <string name="proxy_active_wireguard">Прокси и WireGuard активны</string>
 
     <!-- Туннельное приложение (WireGuard) -->

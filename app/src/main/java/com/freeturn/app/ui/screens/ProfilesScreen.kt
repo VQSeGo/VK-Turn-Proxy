@@ -20,26 +20,20 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExposedDropdownMenuAnchorType
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TooltipAnchorPosition
-import androidx.compose.material3.TooltipBox
-import androidx.compose.material3.TooltipDefaults
-import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,18 +42,17 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.freeturn.app.R
 import com.freeturn.app.data.Profile
 import com.freeturn.app.data.ProfilesSnapshot
-import com.freeturn.app.data.Provider
 import com.freeturn.app.ui.HapticUtil
 import com.freeturn.app.ui.components.ProfileNameDialog
 import com.freeturn.app.ui.util.hapticClickable
@@ -69,19 +62,20 @@ import com.freeturn.app.viewmodel.SettingsViewModel
 fun ProfilesSheetContent(
     settingsViewModel: SettingsViewModel,
     snapshot: ProfilesSnapshot,
-    privacyMode: Boolean = false,
-    onCollapse: () -> Unit = {}
+    containerColor: Color,
+    onClose: () -> Unit
 ) {
     val context = LocalContext.current
+    val updatedMsg = stringResource(R.string.profile_updated_toast)
 
     var showSaveDialog by rememberSaveable { mutableStateOf(false) }
     var renameTarget by rememberSaveable { mutableStateOf<String?>(null) }
     var deleteTarget by rememberSaveable { mutableStateOf<String?>(null) }
     var menuTarget by rememberSaveable { mutableStateOf<String?>(null) }
 
+    val listColors = ListItemDefaults.colors(containerColor = containerColor)
     val takenNames = remember(snapshot.list) { snapshot.list.map { it.name } }
-
-    val active = snapshot.active
+    val hasActive = snapshot.activeId != null
 
     Column(
         modifier = Modifier
@@ -89,64 +83,37 @@ fun ProfilesSheetContent(
             .fillMaxHeight()
             .navigationBarsPadding()
     ) {
-        // Шапка: имя активного профиля + «провайдер | адрес» — как в референсе.
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 24.dp, vertical = 4.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            val profileName = when {
-                active != null -> active.name
-                snapshot.loaded -> stringResource(R.string.profile_unsaved_label)
-                else -> ""
-            }
-            TooltipBox(
-                positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
-                tooltip = { PlainTooltip { Text(profileName) } },
-                state = rememberTooltipState(),
-                enableUserInput = active != null
-            ) {
-                Text(
-                    profileName,
-                    style = MaterialTheme.typography.titleLarge,
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-            val sub = active?.let {
-                val addr = (it.client.serverAddress.takeIf { a -> a.isNotBlank() }
-                    ?: it.ssh.ip.takeIf { a -> a.isNotBlank() })?.redact(privacyMode)
-                listOfNotNull(providerLabel(it.client.provider), addr).joinToString("  |  ")
-            }
-            if (!sub.isNullOrBlank()) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    sub,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    textAlign = TextAlign.Center
-                )
-            }
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        // Селектор провайдера (чип с дропдауном). Пока один пункт — задел на будущее.
-        ProviderChip(
-            current = active?.client?.provider ?: Provider.VK,
-            onSelect = { settingsViewModel.setProvider(it) },
-            modifier = Modifier.align(Alignment.CenterHorizontally)
+        Text(
+            stringResource(R.string.profiles_title),
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 8.dp)
         )
 
-        Spacer(Modifier.height(20.dp))
+        if (hasActive) {
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.profile_update_current)) },
+                supportingContent = { Text(stringResource(R.string.profile_update_current_hint)) },
+                leadingContent = { Icon(painterResource(R.drawable.cached_24px), null) },
+                colors = listColors,
+                modifier = Modifier.hapticClickable(HapticUtil.Pattern.SUCCESS) {
+                    settingsViewModel.updateActiveProfileFromCurrent()
+                    android.widget.Toast.makeText(context, updatedMsg, android.widget.Toast.LENGTH_SHORT).show()
+                }
+            )
+        }
+        ListItem(
+            headlineContent = { Text(stringResource(R.string.profile_save_current)) },
+            supportingContent = { Text(stringResource(R.string.profile_save_current_hint)) },
+            leadingContent = { Icon(painterResource(R.drawable.save_24px), null) },
+            colors = listColors,
+            modifier = Modifier.hapticClickable(HapticUtil.Pattern.CLICK) {
+                showSaveDialog = true
+            }
+        )
 
-        if (!snapshot.loaded) {
-            // Снимок ещё грузится - пустой вес-плейсхолдер, без мигания empty-state.
-            Spacer(Modifier.weight(1f))
-        } else if (snapshot.list.isEmpty()) {
+        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+        if (snapshot.list.isEmpty()) {
             ProfilesEmptyState(
                 onSave = { showSaveDialog = true },
                 modifier = Modifier
@@ -154,41 +121,28 @@ fun ProfilesSheetContent(
                     .weight(1f)
             )
         } else {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 24.dp, end = 16.dp, bottom = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    stringResource(R.string.profiles_servers_title),
-                    style = MaterialTheme.typography.titleMedium
-                )
-                // Правки авто-сохраняются в активный профиль. Тут — только новый.
-                IconButton(onClick = { showSaveDialog = true }) {
-                    Icon(
-                        painterResource(R.drawable.save_24px),
-                        contentDescription = stringResource(R.string.profile_save_current)
-                    )
-                }
-            }
+            Text(
+                stringResource(R.string.profile_section_saved),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 24.dp, top = 8.dp, bottom = 4.dp)
+            )
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(snapshot.list, key = { it.id }) { p ->
-                    ProfileRow(
+                    ProfileCard(
                         profile = p,
                         isActive = snapshot.activeId == p.id,
-                        privacyMode = privacyMode,
                         menuExpanded = menuTarget == p.id,
                         onApply = {
                             if (snapshot.activeId != p.id) {
                                 settingsViewModel.applyProfile(p.id)
-                                onCollapse()
+                                onClose()
                             }
                         },
                         onMenuToggle = { menuTarget = if (menuTarget == p.id) null else p.id },
@@ -202,7 +156,6 @@ fun ProfilesSheetContent(
                             deleteTarget = p.id
                         }
                     )
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                 }
             }
         }
@@ -270,12 +223,10 @@ fun ProfilesSheetContent(
     }
 }
 
-/** Строка-сервер в стиле референса: radio + имя/адрес + меню (rename/delete). */
 @Composable
-private fun ProfileRow(
+private fun ProfileCard(
     profile: Profile,
     isActive: Boolean,
-    privacyMode: Boolean,
     menuExpanded: Boolean,
     onApply: () -> Unit,
     onMenuToggle: () -> Unit,
@@ -283,123 +234,100 @@ private fun ProfileRow(
     onRename: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Row(
+    val context = LocalContext.current
+    val containerColor = if (isActive)
+        MaterialTheme.colorScheme.secondaryContainer
+    else
+        MaterialTheme.colorScheme.surfaceContainerLow
+    val onContainer = if (isActive)
+        MaterialTheme.colorScheme.onSecondaryContainer
+    else
+        MaterialTheme.colorScheme.onSurface
+    val onContainerVariant = if (isActive)
+        MaterialTheme.colorScheme.onSecondaryContainer
+    else
+        MaterialTheme.colorScheme.onSurfaceVariant
+
+    Card(
+        onClick = {
+            HapticUtil.perform(context, HapticUtil.Pattern.CLICK)
+            onApply()
+        },
+        enabled = !isActive,
         modifier = Modifier
             .fillMaxWidth()
-            .semantics { selected = isActive }
-            .hapticClickable(HapticUtil.Pattern.CLICK) { if (!isActive) onApply() }
-            .padding(start = 8.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+            .semantics { selected = isActive },
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+        shape = MaterialTheme.shapes.medium
     ) {
-        RadioButton(
-            selected = isActive,
-            onClick = { if (!isActive) onApply() }
-        )
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                profile.name,
-                style = MaterialTheme.typography.titleMedium,
-                color = if (isActive) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurface
-            )
-            val sub = listOfNotNull(
-                profile.client.serverAddress.takeIf { it.isNotBlank() }?.redact(privacyMode),
-                profile.ssh.ip.takeIf { it.isNotBlank() }?.let { "SSH ${it.redact(privacyMode)}" }
-            ).joinToString(" · ").ifBlank { "—" }
-            Text(
-                sub,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        Box {
-            IconButton(onClick = onMenuToggle) {
-                Icon(
-                    painterResource(R.drawable.more_vert_24px),
-                    contentDescription = stringResource(R.string.profile_more),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            DropdownMenu(
-                expanded = menuExpanded,
-                onDismissRequest = onMenuDismiss
-            ) {
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.profile_rename)) },
-                    leadingIcon = { Icon(painterResource(R.drawable.edit_24px), null) },
-                    onClick = onRename
-                )
-                HorizontalDivider()
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            stringResource(R.string.profile_delete),
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    },
-                    leadingIcon = {
-                        Icon(
-                            painterResource(R.drawable.delete_24px),
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error
-                        )
-                    },
-                    onClick = onDelete
-                )
-            }
-        }
-    }
-}
-
-/** Чип выбора провайдера TURN-creds (-provider). Дропдаун из Provider.ALL. */
-@Composable
-private fun ProviderChip(
-    current: String,
-    onSelect: (String) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val context = LocalContext.current
-    var expanded by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = {
-            HapticUtil.perform(context, HapticUtil.Pattern.CLICK)
-            expanded = it
-        },
-        modifier = modifier
-    ) {
-        FilterChip(
-            selected = true,
-            onClick = {},
-            label = { Text(providerLabel(current)) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
-            modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
-        )
-        ExposedDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false }
+        Row(
+            modifier = Modifier.padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Provider.ALL.forEach { value ->
-                DropdownMenuItem(
-                    text = { Text(providerLabel(value)) },
-                    trailingIcon = if (value == current) ({
-                        Icon(painterResource(R.drawable.check_circle_24px), null)
-                    }) else null,
-                    onClick = {
-                        expanded = false
-                        onSelect(value)
-                    }
+            if (isActive) {
+                Icon(
+                    painterResource(R.drawable.check_circle_24px),
+                    contentDescription = stringResource(R.string.profile_active),
+                    tint = MaterialTheme.colorScheme.primary
                 )
+            } else {
+                Spacer(Modifier.size(24.dp))
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    profile.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = onContainer
+                )
+                val sub = listOfNotNull(
+                    profile.client.serverAddress.takeIf { it.isNotBlank() },
+                    profile.ssh.ip.takeIf { it.isNotBlank() }?.let { "SSH $it" }
+                ).joinToString(" · ").ifBlank { "—" }
+                Text(
+                    sub,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = onContainerVariant
+                )
+            }
+            Box {
+                IconButton(onClick = onMenuToggle) {
+                    Icon(
+                        painterResource(R.drawable.more_vert_24px),
+                        contentDescription = stringResource(R.string.profile_more),
+                        tint = onContainer
+                    )
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = onMenuDismiss
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.profile_rename)) },
+                        leadingIcon = { Icon(painterResource(R.drawable.edit_24px), null) },
+                        onClick = onRename
+                    )
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                stringResource(R.string.profile_delete),
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                painterResource(R.drawable.delete_24px),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        },
+                        onClick = onDelete
+                    )
+                }
             }
         }
     }
-}
-
-@Composable
-private fun providerLabel(value: String): String = when (value) {
-    Provider.VK -> stringResource(R.string.provider_vk)
-    else -> value
 }
 
 @Composable

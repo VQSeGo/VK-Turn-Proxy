@@ -4,19 +4,21 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.core.content.FileProvider
+import com.freeturn.app.data.AppPreferences
 import com.freeturn.app.viewmodel.UpdateState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-class AppUpdater(private val context: Context) {
+class AppUpdater(private val context: Context, private val prefs: AppPreferences) {
 
     private val _state = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val state: StateFlow<UpdateState> = _state.asStateFlow()
@@ -78,7 +80,7 @@ class AppUpdater(private val context: Context) {
         _state.value = UpdateState.Downloading(0)
         try {
             withContext(Dispatchers.IO) {
-                val connection = URL(url).openConnection() as HttpURLConnection
+                val connection = openConnection(url)
                 connection.instanceFollowRedirects = true
                 connection.connectTimeout = 15_000
                 connection.readTimeout = 30_000
@@ -144,8 +146,24 @@ class AppUpdater(private val context: Context) {
 
     // Private
 
-    private fun fetchLatestRelease(): JSONObject? {
-        val connection = URL(RELEASES_URL).openConnection() as HttpURLConnection
+    private suspend fun openConnection(urlStr: String): HttpURLConnection {
+        val isRunning = com.freeturn.app.ProxyServiceState.isRunning.value
+        return if (isRunning) {
+            try {
+                val cfg = prefs.clientConfigFlow.first()
+                val port = cfg.localPort.substringAfterLast(":").toIntOrNull() ?: 9000
+                val proxy = java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", port))
+                NetworkUtil.openConnection(urlStr, proxy)
+            } catch (_: Exception) {
+                NetworkUtil.openConnection(urlStr)
+            }
+        } else {
+            NetworkUtil.openConnection(urlStr)
+        }
+    }
+
+    private suspend fun fetchLatestRelease(): JSONObject? {
+        val connection = openConnection(RELEASES_URL)
         connection.setRequestProperty("Accept", "application/vnd.github+json")
         connection.connectTimeout = 10_000
         connection.readTimeout = 10_000
@@ -172,7 +190,7 @@ class AppUpdater(private val context: Context) {
 
     companion object {
         private const val RELEASES_URL =
-            "https://api.github.com/repos/samosvalishe/turn-proxy-android/releases/latest"
+            "https://api.github.com/repos/VQSeGo/VK-Turn-Proxy/releases/latest"
 
         fun isNewer(remote: String, current: String): Boolean {
             val r = remote.split(".").map { it.toIntOrNull() ?: 0 }

@@ -23,9 +23,7 @@ data class Profile(
 
 data class ProfilesSnapshot(
     val list: List<Profile> = emptyList(),
-    val activeId: String? = null,
-    /** false = initial-значение stateIn до первой эмиссии DataStore. */
-    val loaded: Boolean = false
+    val activeId: String? = null
 ) {
     val active: Profile? get() = list.firstOrNull { it.id == activeId }
 }
@@ -62,7 +60,8 @@ internal object ProfileJson {
         put("client", JSONObject().apply {
             put("serverAddress", p.client.serverAddress)
             put("vkLink", p.client.vkLink)
-            put("provider", p.client.provider)
+            put("systemVkLink", p.client.systemVkLink)
+            put("useCustomVkLink", p.client.useCustomVkLink)
             put("threads", p.client.threads)
             put("streamsPerCred", p.client.streamsPerCred)
             put("useUdp", p.client.useUdp)
@@ -70,27 +69,23 @@ internal object ProfileJson {
             put("localPort", p.client.localPort)
             put("isRawMode", p.client.isRawMode)
             put("rawCommand", p.client.rawCommand)
-            put("tcpForward", p.client.tcpForward)
-            put("bond", p.client.bond)
+            put("vlessMode", p.client.vlessMode)
 
             put("debugMode", p.client.debugMode)
             put("useCarrierDns", p.client.useCarrierDns)
             put("dnsMode", p.client.dnsMode)
+            put("forcePort443", p.client.forcePort443)
             put("syncServerSwitches", p.client.syncServerSwitches)
             put("magicSwitch", p.client.magicSwitch)
             put("magicTurn", p.client.magicTurn)
-            put("tunnelTransport", p.client.tunnelTransport)
-            put("wireGuardConfig", p.client.wireGuardConfig)
-            put("wireGuardTunnelName", p.client.wireGuardTunnelName)
-            put("splitTunnelMode", p.client.splitTunnelMode)
-            put("splitTunnelApps", p.client.splitTunnelApps)
-            put("logsEnabled", p.client.logsEnabled)
         })
         put("proxyListen", p.proxyListen)
         put("proxyConnect", p.proxyConnect)
         put("server", JSONObject().apply {
-            put("obfProfile", p.server.obfProfile)
-            put("obfKey", p.server.obfKey)
+            put("vlessBond", p.server.vlessBond)
+            put("wrapEnabled", p.server.wrapEnabled)
+            put("wrapKey", p.server.wrapKey)
+            put("kcpFec", p.server.kcpFec)
         })
     }
 
@@ -113,9 +108,8 @@ internal object ProfileJson {
             client = ClientConfig(
                 serverAddress = cliO.optString("serverAddress"),
                 vkLink = cliO.optString("vkLink"),
-                provider = cliO.optString("provider", Provider.VK).let {
-                    if (it in Provider.ALL) it else Provider.VK
-                },
+                systemVkLink = cliO.optString("systemVkLink"),
+                useCustomVkLink = cliO.optBoolean("useCustomVkLink", false),
                 threads = cliO.optInt("threads", 4),
                 streamsPerCred = cliO.optInt("streamsPerCred", 10),
                 useUdp = cliO.optBoolean("useUdp", true),
@@ -123,35 +117,25 @@ internal object ProfileJson {
                 localPort = cliO.optString("localPort", "127.0.0.1:9000"),
                 isRawMode = cliO.optBoolean("isRawMode", false),
                 rawCommand = cliO.optString("rawCommand"),
-                tcpForward = cliO.optBoolean("tcpForward", false),
-                bond = cliO.optBoolean("bond", false),
+                vlessMode = cliO.optBoolean("vlessMode", false),
 
                 debugMode = cliO.optBoolean("debugMode", false),
                 useCarrierDns = cliO.optBoolean("useCarrierDns", false),
                 dnsMode = cliO.optString("dnsMode", DnsMode.AUTO).let {
                     if (it in DnsMode.ALL) it else DnsMode.AUTO
                 },
+                forcePort443 = cliO.optBoolean("forcePort443", false),
                 syncServerSwitches = cliO.optBoolean("syncServerSwitches", true),
                 magicSwitch = cliO.optBoolean("magicSwitch", false),
-                magicTurn = cliO.optString("magicTurn"),
-                tunnelTransport = cliO.optString("tunnelTransport", TunnelTransport.WIREGUARD).let {
-                    if (it in TunnelTransport.ALL) it else TunnelTransport.WIREGUARD
-                },
-                wireGuardConfig = cliO.optString("wireGuardConfig"),
-                wireGuardTunnelName = cliO.optString("wireGuardTunnelName").ifBlank { TunnelTransport.DEFAULT_TUNNEL_NAME },
-                splitTunnelMode = cliO.optString("splitTunnelMode", SplitTunnelMode.ALL).let {
-                    if (it in SplitTunnelMode.VALUES) it else SplitTunnelMode.ALL
-                },
-                splitTunnelApps = cliO.optString("splitTunnelApps"),
-                logsEnabled = cliO.optBoolean("logsEnabled", true)
+                magicTurn = cliO.optString("magicTurn")
             ),
             proxyListen = o.optString("proxyListen").ifBlank { "0.0.0.0:56000" },
             proxyConnect = o.optString("proxyConnect").ifBlank { "127.0.0.1:40537" },
             server = AppPreferences.ServerOpts(
-                obfProfile = srvO.optString("obfProfile", ObfProfile.NONE).let {
-                    if (it in ObfProfile.ALL) it else ObfProfile.NONE
-                },
-                obfKey = srvO.optString("obfKey", "")
+                vlessBond = srvO.optBoolean("vlessBond", false),
+                wrapEnabled = srvO.optBoolean("wrapEnabled", false),
+                wrapKey = srvO.optString("wrapKey"),
+                kcpFec = srvO.optBoolean("kcpFec", false)
             )
         )
     }

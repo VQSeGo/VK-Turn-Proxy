@@ -19,7 +19,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.util.concurrent.ConcurrentHashMap
+import android.util.LruCache
 
 /** Установленное приложение — кандидат для split-tunnel. */
 data class AppChoice(val label: String, val packageName: String)
@@ -65,18 +65,27 @@ suspend fun Context.installedInternetApps(): List<AppChoice> = withContext(Dispa
  */
 private object AppIconCache {
     private const val ICON_PX = 160
-    private val cache = ConcurrentHashMap<String, ImageBitmap>()
+    private val cache = object : LruCache<String, ImageBitmap>(50) {
+        override fun sizeOf(key: String, value: ImageBitmap): Int = 1
+    }
 
-    fun cached(packageName: String): ImageBitmap? = cache[packageName]
+    fun cached(packageName: String): ImageBitmap? {
+        synchronized(cache) {
+            return cache.get(packageName)
+        }
+    }
 
     suspend fun load(context: Context, packageName: String): ImageBitmap? =
         withContext(Dispatchers.IO) {
-            cache[packageName]?.let { return@withContext it }
+            cached(packageName)?.let { return@withContext it }
             runCatching {
-                context.packageManager.getApplicationIcon(packageName)
+                val bitmap = context.packageManager.getApplicationIcon(packageName)
                     .toBitmap(ICON_PX, ICON_PX)
                     .asImageBitmap()
-                    .also { cache[packageName] = it }
+                synchronized(cache) {
+                    cache.put(packageName, bitmap)
+                }
+                bitmap
             }.getOrNull()
         }
 }
