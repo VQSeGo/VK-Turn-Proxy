@@ -193,12 +193,40 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
             "https://api.github.com/repos/VQSeGo/VK-Turn-Proxy/releases/latest"
 
         fun isNewer(remote: String, current: String): Boolean {
-            val r = remote.split(".").map { it.toIntOrNull() ?: 0 }
-            val c = current.split(".").map { it.toIntOrNull() ?: 0 }
-            for (i in 0 until maxOf(r.size, c.size)) {
-                val rv = r.getOrElse(i) { 0 }
-                val cv = c.getOrElse(i) { 0 }
+            val rParts = remote.split("-", limit = 2)
+            val cParts = current.split("-", limit = 2)
+
+            val rNums = rParts[0].split(".").map { it.toIntOrNull() ?: 0 }
+            val cNums = cParts[0].split(".").map { it.toIntOrNull() ?: 0 }
+            for (i in 0 until maxOf(rNums.size, cNums.size)) {
+                val rv = rNums.getOrElse(i) { 0 }
+                val cv = cNums.getOrElse(i) { 0 }
                 if (rv != cv) return rv > cv
+            }
+
+            val rHasPre = rParts.size > 1
+            val cHasPre = cParts.size > 1
+
+            if (!rHasPre && cHasPre) return true
+            if (rHasPre && !cHasPre) return false
+            if (!rHasPre && !cHasPre) return false
+
+            val rPreFields = rParts[1].split(".", "-")
+            val cPreFields = cParts[1].split(".", "-")
+            for (i in 0 until maxOf(rPreFields.size, cPreFields.size)) {
+                val rf = rPreFields.getOrElse(i) { "" }
+                val cf = cPreFields.getOrElse(i) { "" }
+                if (rf == cf) continue
+
+                val rfNum = rf.toIntOrNull()
+                val cfNum = cf.toIntOrNull()
+
+                return when {
+                    rfNum != null && cfNum != null -> rfNum > cfNum
+                    rfNum != null && cfNum == null -> false
+                    rfNum == null && cfNum != null -> true
+                    else -> rf.compareTo(cf) > 0
+                }
             }
             return false
         }
