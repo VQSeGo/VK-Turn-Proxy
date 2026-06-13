@@ -50,7 +50,7 @@ fun LogsScreen(proxyViewModel: ProxyViewModel) {
     val listState = rememberLazyListState()
 
     LaunchedEffect(logs.size) {
-        if (logs.isNotEmpty()) listState.animateScrollToItem(logs.lastIndex)
+        if (logs.isNotEmpty()) listState.scrollToItem(logs.lastIndex)
     }
 
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()

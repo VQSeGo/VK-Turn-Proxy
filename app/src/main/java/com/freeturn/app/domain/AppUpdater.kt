@@ -98,20 +98,42 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
 
     private suspend fun downloadUpdateInternal(url: String, useProxy: Boolean) {
         withContext(Dispatchers.IO) {
-            val connection = openConnection(url, useProxy)
-            connection.instanceFollowRedirects = true
-            connection.connectTimeout = 15_000
-            connection.readTimeout = 30_000
+            var currentUrl = url
+            var redirectCount = 0
+            val maxRedirects = 5
+            var connection: HttpURLConnection? = null
+
             try {
-                connection.connect()
-                if (connection.responseCode !in 200..299) {
-                    throw java.io.IOException("HTTP ${connection.responseCode}")
+                while (redirectCount < maxRedirects) {
+                    val conn = openCustomConnection(currentUrl, useProxy)
+                    conn.instanceFollowRedirects = false
+                    conn.connectTimeout = 15_000
+                    conn.readTimeout = 30_000
+
+                    val responseCode = conn.responseCode
+                    if (responseCode in listOf(301, 302, 303, 307, 308)) {
+                        val location = conn.getHeaderField("Location")
+                        conn.disconnect()
+                        if (location != null) {
+                            currentUrl = URL(URL(currentUrl), location).toString()
+                            redirectCount++
+                            continue
+                        }
+                    }
+                    connection = conn
+                    break
                 }
 
-                val totalSize = connection.contentLength.toLong()
+                val activeConn = connection ?: throw java.io.IOException("Превышено число перенаправлений")
+                activeConn.connect()
+                if (activeConn.responseCode !in 200..299) {
+                    throw java.io.IOException("HTTP ${activeConn.responseCode}")
+                }
+
+                val totalSize = activeConn.contentLength.toLong()
                 var downloaded = 0L
 
-                connection.inputStream.use { input ->
+                activeConn.inputStream.use { input ->
                     apkFile.outputStream().use { output ->
                         val buffer = ByteArray(8192)
                         var bytesRead: Int
@@ -127,7 +149,7 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
                     }
                 }
             } finally {
-                connection.disconnect()
+                connection?.disconnect()
             }
         }
         _state.value = UpdateState.ReadyToInstall
@@ -166,23 +188,92 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
         }
     }
 
+    private suspend fun resolveDnsOverHttps(hostname: String, useProxy: Boolean): String? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val urlStr = "https://8.8.8.8/resolve?name=$hostname&type=A"
+                val conn = openConnection(urlStr, useProxy)
+                conn.connectTimeout = 5000
+                conn.readTimeout = 5000
+                conn.connect()
+                if (conn.responseCode == 200) {
+                    val json = JSONObject(conn.inputStream.bufferedReader().readText())
+                    val answers = json.optJSONArray("Answer")
+                    if (answers != null && answers.length() > 0) {
+                        for (i in 0 until answers.length()) {
+                            val ans = answers.getJSONObject(i)
+                            if (ans.optInt("type") == 1) {
+                                return@withContext ans.getString("data")
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+
+            try {
+                val urlStr = "https://1.1.1.1/dns-query?name=$hostname&type=A"
+                val conn = openConnection(urlStr, useProxy)
+                conn.setRequestProperty("Accept", "application/dns-json")
+                conn.connectTimeout = 5000
+                conn.readTimeout = 5000
+                conn.connect()
+                if (conn.responseCode == 200) {
+                    val json = JSONObject(conn.inputStream.bufferedReader().readText())
+                    val answers = json.optJSONArray("Answer")
+                    if (answers != null && answers.length() > 0) {
+                        for (i in 0 until answers.length()) {
+                            val ans = answers.getJSONObject(i)
+                            if (ans.optInt("type") == 1) {
+                                return@withContext ans.getString("data")
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+
+            null
+        }
+    }
+
+    private suspend fun openCustomConnection(urlStr: String, useProxy: Boolean): HttpURLConnection {
+        val url = URL(urlStr)
+        val host = url.host
+
+        if (url.protocol.lowercase() == "https" && !host.matches(Regex("^[0-9.]+$"))) {
+            val ip = resolveDnsOverHttps(host, useProxy)
+            if (ip != null) {
+                val portStr = if (url.port != -1) ":${url.port}" else ""
+                val path = url.file
+                val rewrittenUrlStr = "https://$ip$portStr$path"
+
+                val conn = openConnection(rewrittenUrlStr, useProxy) as javax.net.ssl.HttpsURLConnection
+                val defaultFactory = javax.net.ssl.HttpsURLConnection.getDefaultSSLSocketFactory()
+                conn.sslSocketFactory = SniSSLSocketFactory(defaultFactory, host)
+                conn.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, session ->
+                    javax.net.ssl.HttpsURLConnection.getDefaultHostnameVerifier().verify(host, session)
+                }
+                return conn
+            }
+        }
+
+        return openConnection(urlStr, useProxy)
+    }
+
     private suspend fun fetchLatestRelease(): JSONObject? {
         val useProxy = com.freeturn.app.ProxyServiceState.isRunning.value
         return try {
             fetchLatestReleaseInternal(useProxy)
         } catch (e: Exception) {
             if (useProxy) {
-                try {
-                    fetchLatestReleaseInternal(false)
-                } catch (_: Exception) {
-                    null
-                }
-            } else null
+                fetchLatestReleaseInternal(false)
+            } else {
+                throw e
+            }
         }
     }
 
     private suspend fun fetchLatestReleaseInternal(useProxy: Boolean): JSONObject? {
-        val connection = openConnection(RELEASES_URL, useProxy)
+        val connection = openCustomConnection(RELEASES_URL, useProxy)
         connection.setRequestProperty("Accept", "application/vnd.github+json")
         connection.connectTimeout = 10_000
         connection.readTimeout = 10_000
@@ -250,4 +341,23 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
             return false
         }
     }
+}
+
+class SniSSLSocketFactory(
+    private val delegate: javax.net.ssl.SSLSocketFactory,
+    private val targetHost: String
+) : javax.net.ssl.SSLSocketFactory() {
+    override fun getDefaultCipherSuites(): Array<String> = delegate.defaultCipherSuites
+    override fun getSupportedCipherSuites(): Array<String> = delegate.supportedCipherSuites
+
+    override fun createSocket(s: java.net.Socket?, host: String?, port: Int, autoClose: Boolean): java.net.Socket {
+        return delegate.createSocket(s, targetHost, port, autoClose)
+    }
+
+    override fun createSocket(host: String?, port: Int): java.net.Socket = delegate.createSocket(host, port)
+    override fun createSocket(host: String?, port: Int, localHost: java.net.InetAddress?, localPort: Int): java.net.Socket =
+        delegate.createSocket(host, port, localHost, localPort)
+    override fun createSocket(address: java.net.InetAddress?, port: Int): java.net.Socket = delegate.createSocket(address, port)
+    override fun createSocket(address: java.net.InetAddress?, port: Int, localAddress: java.net.InetAddress?, localPort: Int): java.net.Socket =
+        delegate.createSocket(address, port, localAddress, localPort)
 }

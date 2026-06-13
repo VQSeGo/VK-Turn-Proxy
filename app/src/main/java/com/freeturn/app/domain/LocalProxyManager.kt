@@ -55,7 +55,7 @@ class LocalProxyManager(private val context: Context) {
             Triple(running, stats, captcha)
         }.collect { (running, stats, captcha) ->
             val current = _proxyState.value
-            if (current is ProxyState.Error && !running) {
+            if (current is ProxyState.Error) {
                 return@collect
             }
 

@@ -435,12 +435,17 @@ fun HomeScreen(
 
                     val networkType = rememberNetworkType()
                     Spacer(Modifier.height(12.dp))
+                    val badgeBg = if (networkType == NetworkType.NONE) {
+                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.2f)
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.Center,
                         modifier = Modifier
                             .clip(MaterialTheme.shapes.small)
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            .background(badgeBg)
                             .padding(horizontal = 10.dp, vertical = 6.dp)
                     ) {
                         Icon(
@@ -448,7 +453,7 @@ fun HomeScreen(
                                 when (networkType) {
                                     NetworkType.WIFI -> R.drawable.wifi_24px
                                     NetworkType.MOBILE -> R.drawable.mobile_24px
-                                    NetworkType.NONE -> R.drawable.error_24px
+                                    NetworkType.NONE -> R.drawable.mobile_24px
                                 }
                             ),
                             contentDescription = null,

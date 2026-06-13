@@ -84,17 +84,17 @@ class AppPreferences(context: Context) {
                 context.dataStore.edit { prefs ->
                     val legacyPass = prefs[SSH_PASS_LEGACY]
                     if (!legacyPass.isNullOrEmpty()) {
-                        encryptedPrefs.edit { putString("ssh_pass", legacyPass) }
+                        encryptedPrefs.edit(commit = true) { putString("ssh_pass", legacyPass) }
                         prefs.remove(SSH_PASS_LEGACY)
                     }
                     val legacyKey = prefs[SSH_KEY_LEGACY]
                     if (!legacyKey.isNullOrEmpty()) {
-                        encryptedPrefs.edit { putString("ssh_key", legacyKey) }
+                        encryptedPrefs.edit(commit = true) { putString("ssh_key", legacyKey) }
                         prefs.remove(SSH_KEY_LEGACY)
                     }
                     val legacyProfiles = prefs[PROFILES_JSON]
                     if (!legacyProfiles.isNullOrEmpty()) {
-                        encryptedPrefs.edit { putString("profiles_json", legacyProfiles) }
+                        encryptedPrefs.edit(commit = true) { putString("profiles_json", legacyProfiles) }
                         prefs.remove(PROFILES_JSON)
                     }
                     prefs.remove(booleanPreferencesKey("client_no_dtls"))

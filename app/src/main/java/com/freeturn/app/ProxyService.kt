@@ -219,6 +219,9 @@ class ProxyService : Service() {
             ProxyServiceState.setWatchdogAttempt(0)
             ProxyServiceState.startNewSession(this)
 
+            if (wakeLock?.isHeld == true) {
+                try { wakeLock?.release() } catch (_: Exception) {}
+            }
             val powerManager = getSystemService(POWER_SERVICE) as PowerManager
             wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "VkTurn::BgLock")
             wakeLock?.acquire(TimeUnit.HOURS.toMillis(24))
@@ -273,7 +276,9 @@ class ProxyService : Service() {
         // Clean up any leaked/zombie processes of the proxy binary from previous crashed runs
         try {
             val binaryName = File(executable).name
-            Runtime.getRuntime().exec(arrayOf("killall", binaryName)).waitFor(2, TimeUnit.SECONDS)
+            val killProcess = Runtime.getRuntime().exec(arrayOf("killall", binaryName))
+            killProcess.waitForCompat(2, TimeUnit.SECONDS)
+            killProcess.destroyCompat()
         } catch (_: Exception) {}
 
         val cmdArgs = mutableListOf<String>()
@@ -520,6 +525,8 @@ class ProxyService : Service() {
                                     System.setProperty("socksProxyHost", "127.0.0.1")
                                     System.setProperty("socksProxyPort", port.toString())
                                 } catch (_: Exception) {}
+                                restartCount.set(0)
+                                ProxyServiceState.setWatchdogAttempt(0)
                                 ProxyServiceState.setStartupResult(StartupResult.Success)
                                 ProxyServiceState.markConnectedIfAbsent(SystemClock.elapsedRealtime())
                                 if (coreOnlyMode) {
@@ -643,6 +650,7 @@ class ProxyService : Service() {
     // Network handover
 
     private fun registerNetworkCallback() {
+        unregisterNetworkCallback()
         networkInitialized = false
         val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
         val cb = object : ConnectivityManager.NetworkCallback() {
@@ -680,17 +688,19 @@ class ProxyService : Service() {
                 // Дебаунс: отменяем предыдущий ждущий перезапуск, если он был
                 val processToDestroy = process.get()
                 if (processToDestroy != null) {
-                    networkDebounceJob?.cancel()
-                    networkDebounceJob = serviceScope.launch {
-                        kotlinx.coroutines.delay(2000)
-                        synchronized(this@ProxyService) {
-                            if (!userStopped.get() && process.get() == processToDestroy) {
-                                ProxyServiceState.addLog("=== СМЕНА СЕТИ — ПЕРЕЗАПУСК ===")
-                                updateNotification("Смена сети, переподключение...")
-                                restartCount.set(0)
-                                ProxyServiceState.setWatchdogAttempt(0)
-                                val p = process.getAndSet(null)
-                                p?.destroyCompat()
+                    synchronized(this@ProxyService) {
+                        networkDebounceJob?.cancel()
+                        networkDebounceJob = serviceScope.launch {
+                            kotlinx.coroutines.delay(2000)
+                            synchronized(this@ProxyService) {
+                                if (!userStopped.get() && process.get() == processToDestroy) {
+                                    ProxyServiceState.addLog("=== СМЕНА СЕТИ — ПЕРЕЗАПУСК ===")
+                                    updateNotification("Смена сети, переподключение...")
+                                    restartCount.set(0)
+                                    ProxyServiceState.setWatchdogAttempt(0)
+                                    val p = process.getAndSet(null)
+                                    p?.destroyCompat()
+                                }
                             }
                         }
                     }
@@ -804,7 +814,13 @@ class ProxyService : Service() {
         try {
             val wgJsonStr = prefs.getWgConfig()
             if (wgJsonStr.isEmpty()) {
-                ProxyServiceState.addLog("Ошибка: Конфигурация WireGuard пуста.")
+                val errMsg = "Ошибка: Конфигурация WireGuard пуста."
+                ProxyServiceState.addLog(errMsg)
+                if (!coreOnlyMode) {
+                    ProxyServiceState.setStartupResult(StartupResult.Failed(errMsg))
+                    userStopped.set(true)
+                    stopSelf()
+                }
                 return
             }
             val wgJson = org.json.JSONObject(wgJsonStr)
@@ -837,7 +853,13 @@ class ProxyService : Service() {
             wgBackend?.setState(turnTunnel, Tunnel.State.UP, config)
             ProxyServiceState.addLog("WireGuard туннель запущен.")
         } catch (e: Exception) {
-            ProxyServiceState.addLog("Ошибка запуска WireGuard: ${e.message}")
+            val errMsg = "Ошибка запуска WireGuard: ${e.message}"
+            ProxyServiceState.addLog(errMsg)
+            if (!coreOnlyMode) {
+                ProxyServiceState.setStartupResult(StartupResult.Failed(errMsg))
+                userStopped.set(true)
+                stopSelf()
+            }
         }
     }
 
