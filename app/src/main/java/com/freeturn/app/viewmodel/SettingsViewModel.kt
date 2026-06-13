@@ -199,6 +199,8 @@ class SettingsViewModel(
                 val client = prefs.clientConfigFlow.first()
                 val listen = prefs.proxyListenFlow.first()
                 val connect = prefs.proxyConnectFlow.first()
+                val ssh = prefs.sshConfigFlow.first()
+                val server = prefs.serverOptsFlow.first()
                 val base = name.trim().ifBlank {
                     serverAddrToProfileName(client.serverAddress)
                 }
@@ -207,7 +209,9 @@ class SettingsViewModel(
                     name = uniqueProfileName(base, current.list, null),
                     client = client,
                     proxyListen = listen,
-                    proxyConnect = connect
+                    proxyConnect = connect,
+                    ssh = ssh,
+                    server = server
                 )
                 prefs.saveProfiles(current.list + profile)
                 prefs.setActiveProfileId(profile.id)
@@ -222,13 +226,15 @@ class SettingsViewModel(
         val listen = prefs.proxyListenFlow.first()
         val connect = prefs.proxyConnectFlow.first()
         val ssh = prefs.sshConfigFlow.first()
+        val server = prefs.serverOptsFlow.first()
         val updated = current.list.map {
             if (it.id == activeId)
                 it.copy(
                     client = client,
                     proxyListen = listen,
                     proxyConnect = connect,
-                    ssh = ssh
+                    ssh = ssh,
+                    server = server
                 )
             else it
         }
@@ -263,6 +269,7 @@ class SettingsViewModel(
                 prefs.saveClientConfig(t.client)
                 prefs.saveProxyConfig(t.proxyListen, t.proxyConnect)
                 prefs.saveSshConfig(t.ssh)
+                prefs.saveServerOpts(t.server)
                 prefs.setActiveProfileId(t.id)
                 t
             } ?: return@launch
@@ -290,6 +297,7 @@ class SettingsViewModel(
                         prefs.saveClientConfig(next.client)
                         prefs.saveProxyConfig(next.proxyListen, next.proxyConnect)
                         prefs.saveSshConfig(next.ssh)
+                        prefs.saveServerOpts(next.server)
                     }
                 }
             }

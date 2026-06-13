@@ -137,9 +137,17 @@ class ProxyService : Service() {
                 )
             )
         }
+        serviceScope.launch {
+            ProxyServiceState.captchaSession.collect { session ->
+                if (session == null) {
+                    cancelCaptchaNotification()
+                }
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        stoppedByWifi = false
         // ВАЖНО: startForeground вызываем ПЕРВЫМ делом и БЕЗУСЛОВНО. Если ранее
         // была ветка с return до startForeground (например, при stale
         // ProxyServiceState.isRunning после kill'а сервиса без onDestroy),
@@ -261,6 +269,12 @@ class ProxyService : Service() {
             ProxyServiceState.setStartupResult(StartupResult.Failed("core binary not found"))
             return
         }
+
+        // Clean up any leaked/zombie processes of the proxy binary from previous crashed runs
+        try {
+            val binaryName = File(executable).name
+            Runtime.getRuntime().exec(arrayOf("killall", binaryName)).waitFor(2, TimeUnit.SECONDS)
+        } catch (_: Exception) {}
 
         val cmdArgs = mutableListOf<String>()
 
@@ -413,7 +427,7 @@ class ProxyService : Service() {
                         null
                     }
                     if (line == null) break
-                    val l = line ?: continue
+                    val l = line
                     ProxyServiceState.addLog(l)
 
                     // Детекция URL ручной капчи. Каждый раз выдаём новый sessionId,
@@ -565,7 +579,8 @@ class ProxyService : Service() {
             // Процесс мёртв — активных соединений нет. При watchdog-рестарте
             // publishStats на новом старте снова выставит правильный target.
             ProxyServiceState.setConnectionStats(ConnectionStats.IDLE)
-            process.set(null)
+            val p = process.getAndSet(null)
+            p?.destroyCompat()
             val isCancelled = !kotlinx.coroutines.currentCoroutineContext().isActive
             when {
                 userStopped.get() || isCancelled -> {
@@ -658,16 +673,21 @@ class ProxyService : Service() {
                 }
                 
                 // Дебаунс: отменяем предыдущий ждущий перезапуск, если он был
-                networkDebounceJob?.cancel()
-                networkDebounceJob = serviceScope.launch {
-                    kotlinx.coroutines.delay(2000)
-                    if (!userStopped.get() && process.get() != null) {
-                        ProxyServiceState.addLog("=== СМЕНА СЕТИ — ПЕРЕЗАПУСК ===")
-                        updateNotification("Смена сети, переподключение...")
-                        restartCount.set(0)
-                        ProxyServiceState.setWatchdogAttempt(0)
-                        val p = process.get()
-                        p?.destroyCompat()
+                val processToDestroy = process.get()
+                if (processToDestroy != null) {
+                    networkDebounceJob?.cancel()
+                    networkDebounceJob = serviceScope.launch {
+                        kotlinx.coroutines.delay(2000)
+                        synchronized(this@ProxyService) {
+                            if (!userStopped.get() && process.get() == processToDestroy) {
+                                ProxyServiceState.addLog("=== СМЕНА СЕТИ — ПЕРЕЗАПУСК ===")
+                                updateNotification("Смена сети, переподключение...")
+                                restartCount.set(0)
+                                ProxyServiceState.setWatchdogAttempt(0)
+                                val p = process.getAndSet(null)
+                                p?.destroyCompat()
+                            }
+                        }
                     }
                 }
             }
@@ -874,11 +894,40 @@ class ProxyService : Service() {
             }
 
             var conn: java.net.HttpURLConnection? = null
+            var useProxy = false
+            val isRunning = ProxyServiceState.isRunning.value
+            val isConnected = ProxyServiceState.connectedSince.value != null
+            val hasProcess = process.get() != null
+
+            if (isRunning && isConnected && hasProcess) {
+                useProxy = true
+            }
+
             try {
-                conn = com.freeturn.app.domain.NetworkUtil.openConnection(configUrl)
-                conn.connectTimeout = 10_000
-                conn.readTimeout = 10_000
-                conn.connect()
+                if (useProxy) {
+                    try {
+                        val cfg = prefs.clientConfigFlow.first()
+                        val port = cfg.localPort.substringAfterLast(":").toIntOrNull() ?: 9000
+                        ProxyServiceState.addLog("Загрузка конфига: роутинг через локальный SOCKS5 ($port)")
+                        val proxy = java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", port))
+                        conn = com.freeturn.app.domain.NetworkUtil.openConnection(configUrl, proxy)
+                        conn.connectTimeout = 10_000
+                        conn.readTimeout = 10_000
+                        conn.connect()
+                    } catch (e: Exception) {
+                        ProxyServiceState.addLog("Сбой SOCKS5 при загрузке конфига: ${e.message}, прямой запрос...")
+                        conn?.disconnect()
+                        conn = null
+                        useProxy = false
+                    }
+                }
+
+                if (conn == null) {
+                    conn = com.freeturn.app.domain.NetworkUtil.openConnection(configUrl)
+                    conn.connectTimeout = 10_000
+                    conn.readTimeout = 10_000
+                    conn.connect()
+                }
 
                 if (conn.responseCode == 200) {
                     val encryptedBytes = conn.inputStream.use { it.readBytes() }
@@ -891,7 +940,7 @@ class ProxyService : Service() {
                     val serverAddress = relay.getString("server_address")
                     val localPort = "127.0.0.1:" + relay.getString("local_port")
                     val threads = relay.getInt("threads")
-                    val streamsPerCred = relay.getInt("streams_per_cred")
+                    val streamsPerCred = relay.optInt("streams_per_cred", 10)
 
                     val vkLink = json.getString("vk_call_link")
 
@@ -946,7 +995,10 @@ class ProxyService : Service() {
                 }
             } catch (e: Exception) {
                 val userMsg = when (e) {
+                    is java.net.UnknownHostException -> "Нет подключения к интернету или сервер конфигурации недоступен"
+                    is java.net.SocketTimeoutException, is java.net.ConnectException -> "Превышено время ожидания конфигурации"
                     is javax.net.ssl.SSLException -> "Ошибка SSL/TLS при загрузке конфигурации (возможно, блокировка)"
+                    is java.io.IOException -> "Ошибка сети при загрузке конфигурации"
                     else -> e.message ?: "Неизвестная ошибка"
                 }
                 ProxyServiceState.addLog("Ошибка скачивания/дешифрования конфига: $userMsg")
@@ -1006,34 +1058,44 @@ class ProxyService : Service() {
     private suspend fun performTokenAuth(token: String): Result<ServiceAuthResponse> {
         return withContext(Dispatchers.IO) {
             var conn: java.net.HttpURLConnection? = null
+            var useProxy = false
+            val isRunning = ProxyServiceState.isRunning.value
+            val isConnected = ProxyServiceState.connectedSince.value != null
+            val hasProcess = process.get() != null
+            val encodedToken = java.net.URLEncoder.encode(token, "UTF-8")
+            val urlString = "https://tvaldsforge.online/bot/turnproxy/auth?token=$encodedToken"
+
+            if (isRunning && isConnected && hasProcess) {
+                useProxy = true
+            }
+
             try {
-                val isRunning = ProxyServiceState.isRunning.value
-                val isConnected = ProxyServiceState.connectedSince.value != null
-                val hasProcess = process.get() != null
-                val encodedToken = java.net.URLEncoder.encode(token, "UTF-8")
-                val urlString = "https://tvaldsforge.online/bot/turnproxy/auth?token=$encodedToken"
-                conn = when {
-                    isRunning && isConnected && hasProcess -> {
-                        try {
-                            val cfg = prefs.clientConfigFlow.first()
-                            val port = cfg.localPort.substringAfterLast(":").toIntOrNull() ?: 9000
-                            ProxyServiceState.addLog("Запрос авторизации: роутинг через локальный SOCKS5 ($port)")
-                            val proxy = java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", port))
-                            com.freeturn.app.domain.NetworkUtil.openConnection(urlString, proxy)
-                        } catch (e: Exception) {
-                            ProxyServiceState.addLog("Сбой SOCKS5: ${e.message}, прямой запрос...")
-                            com.freeturn.app.domain.NetworkUtil.openConnection(urlString)
-                        }
-                    }
-                    else -> {
-                        com.freeturn.app.domain.NetworkUtil.openConnection(urlString)
+                if (useProxy) {
+                    try {
+                        val cfg = prefs.clientConfigFlow.first()
+                        val port = cfg.localPort.substringAfterLast(":").toIntOrNull() ?: 9000
+                        ProxyServiceState.addLog("Запрос авторизации: роутинг через локальный SOCKS5 ($port)")
+                        val proxy = java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", port))
+                        conn = com.freeturn.app.domain.NetworkUtil.openConnection(urlString, proxy)
+                        conn.requestMethod = "GET"
+                        conn.connectTimeout = 10_000
+                        conn.readTimeout = 10_000
+                        conn.connect()
+                    } catch (e: Exception) {
+                        ProxyServiceState.addLog("Сбой SOCKS5: ${e.message}, прямой запрос...")
+                        conn?.disconnect()
+                        conn = null
+                        useProxy = false
                     }
                 }
 
-                conn.requestMethod = "GET"
-                conn.connectTimeout = 10_000
-                conn.readTimeout = 10_000
-                conn.connect()
+                if (conn == null) {
+                    conn = com.freeturn.app.domain.NetworkUtil.openConnection(urlString)
+                    conn.requestMethod = "GET"
+                    conn.connectTimeout = 10_000
+                    conn.readTimeout = 10_000
+                    conn.connect()
+                }
 
                 if (conn.responseCode == 200) {
                     val jsonStr = conn.inputStream.bufferedReader().use { it.readText() }
@@ -1080,8 +1142,8 @@ class ProxyService : Service() {
         }
         stopWireGuardTunnel()
         synchronized(this) {
-            process.get()?.destroyCompat()
-            process.set(null)
+            val p = process.getAndSet(null)
+            p?.destroyCompat()
             launchJob?.cancel()
             launchJob = null
         }
@@ -1091,6 +1153,9 @@ class ProxyService : Service() {
 }
 
 private fun Process.destroyCompat() {
+    try { outputStream?.close() } catch (_: Exception) {}
+    try { inputStream?.close() } catch (_: Exception) {}
+    try { errorStream?.close() } catch (_: Exception) {}
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) destroyForcibly() else destroy()
 }
 

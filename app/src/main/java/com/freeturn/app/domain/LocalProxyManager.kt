@@ -60,7 +60,9 @@ class LocalProxyManager(private val context: Context) {
             }
 
             if (!running) {
-                _proxyState.value = ProxyState.Idle
+                if (current !is ProxyState.Starting) {
+                    _proxyState.value = ProxyState.Idle
+                }
             } else if (captcha != null) {
                 _proxyState.value = ProxyState.CaptchaRequired(captcha.url, captcha.sessionId)
             } else {
@@ -119,8 +121,14 @@ class LocalProxyManager(private val context: Context) {
         //   • сервис не остановится сам (watchdog исчерпал лимит → isRunning=false).
         // Верхняя граница в 5 минут — страховка от подвисшего сервиса.
         val result = withTimeoutOrNull(5 * 60_000L) {
-            // Дождаться, что сервис фактически поднялся (onStartCommand).
-            ProxyServiceState.isRunning.first { it }
+            // Wait until the service starts (isRunning becomes true) OR until a startup result is set
+            combine(
+                ProxyServiceState.startupResult,
+                ProxyServiceState.isRunning
+            ) { sr, running -> sr to running }
+                .first { (sr, running) -> sr != null || running }
+
+            // Once it has started or failed early, wait until it either has a startup result OR stops running
             combine(
                 ProxyServiceState.startupResult,
                 ProxyServiceState.isRunning

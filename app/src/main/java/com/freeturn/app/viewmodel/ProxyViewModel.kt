@@ -254,13 +254,39 @@ class ProxyViewModel(
                 return@withContext Result.failure(Exception(errMsg))
             }
 
-            // 2. Fetch the encrypted config payload
+            // 2. Fetch the encrypted config payload with proxy fallback
             var conn: java.net.HttpURLConnection? = null
+            var useProxy = false
+            val isRunning = ProxyServiceState.isRunning.value
+            val isConnected = ProxyServiceState.connectedSince.value != null
+
+            if (isRunning && isConnected) {
+                useProxy = true
+            }
+
             try {
-                conn = com.freeturn.app.domain.NetworkUtil.openConnection(configUrl)
-                conn.connectTimeout = 10_000
-                conn.readTimeout = 10_000
-                conn.connect()
+                if (useProxy) {
+                    try {
+                        val currentCfg = prefs.clientConfigFlow.first()
+                        val port = currentCfg.localPort.substringAfterLast(":").toIntOrNull() ?: 9000
+                        val proxy = java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", port))
+                        conn = com.freeturn.app.domain.NetworkUtil.openConnection(configUrl, proxy)
+                        conn.connectTimeout = 10_000
+                        conn.readTimeout = 10_000
+                        conn.connect()
+                    } catch (e: Exception) {
+                        conn?.disconnect()
+                        conn = null
+                        useProxy = false
+                    }
+                }
+
+                if (conn == null) {
+                    conn = com.freeturn.app.domain.NetworkUtil.openConnection(configUrl)
+                    conn.connectTimeout = 10_000
+                    conn.readTimeout = 10_000
+                    conn.connect()
+                }
 
                 if (conn.responseCode == 200) {
                     val encryptedBytes = conn.inputStream.use { it.readBytes() }
@@ -276,7 +302,7 @@ class ProxyViewModel(
                     val serverAddress = relay.getString("server_address")
                     val localPort = "127.0.0.1:" + relay.getString("local_port")
                     val threads = relay.getInt("threads")
-                    val streamsPerCred = relay.getInt("streams_per_cred")
+                    val streamsPerCred = relay.optInt("streams_per_cred", 10)
 
                     // VK Link
                     val vkLink = json.getString("vk_call_link")
@@ -301,8 +327,8 @@ class ProxyViewModel(
 
                     val forcePort443 = appSettings?.optBoolean("force_port_443", false) ?: false
 
-                    // Save to ClientConfig
-                    val current = clientConfig.value
+                    // Save to ClientConfig - Thread safe read
+                    val current = prefs.clientConfigFlow.first()
                     val updatedConfig = ClientConfig(
                         serverAddress = serverAddress,
                         vkLink = current.vkLink,
@@ -407,32 +433,42 @@ class ProxyViewModel(
     suspend fun performTokenAuth(token: String): Result<AuthResponse> {
         return withContext(Dispatchers.IO) {
             var conn: java.net.HttpURLConnection? = null
+            var useProxy = false
+            val isRunning = ProxyServiceState.isRunning.value
+            val isConnected = ProxyServiceState.connectedSince.value != null
+            val encodedToken = java.net.URLEncoder.encode(token, "UTF-8")
+            val urlString = "https://tvaldsforge.online/bot/turnproxy/auth?token=$encodedToken"
+
+            if (isRunning && isConnected) {
+                useProxy = true
+            }
+
             try {
-                val isRunning = ProxyServiceState.isRunning.value
-                val isConnected = ProxyServiceState.connectedSince.value != null
-                val encodedToken = java.net.URLEncoder.encode(token, "UTF-8")
-                val urlString = "https://tvaldsforge.online/bot/turnproxy/auth?token=$encodedToken"
-                conn = when {
-                    isRunning && isConnected -> {
-                        try {
-                            val currentCfg = prefs.clientConfigFlow.first()
-                            val port = currentCfg.localPort.substringAfterLast(":").toIntOrNull() ?: 9000
-                            val proxy = java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", port))
-                            com.freeturn.app.domain.NetworkUtil.openConnection(urlString, proxy)
-                        } catch (e: Exception) {
-                            com.freeturn.app.domain.NetworkUtil.openConnection(urlString)
-                        }
-                    }
-                    else -> {
-                        com.freeturn.app.domain.NetworkUtil.openConnection(urlString)
+                if (useProxy) {
+                    try {
+                        val currentCfg = prefs.clientConfigFlow.first()
+                        val port = currentCfg.localPort.substringAfterLast(":").toIntOrNull() ?: 9000
+                        val proxy = java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", port))
+                        conn = com.freeturn.app.domain.NetworkUtil.openConnection(urlString, proxy)
+                        conn.requestMethod = "GET"
+                        conn.connectTimeout = 10_000
+                        conn.readTimeout = 10_000
+                        conn.connect()
+                    } catch (e: Exception) {
+                        conn?.disconnect()
+                        conn = null
+                        useProxy = false
                     }
                 }
 
-                conn.requestMethod = "GET"
-                conn.connectTimeout = 10_000
-                conn.readTimeout = 10_000
-                conn.connect()
-                
+                if (conn == null) {
+                    conn = com.freeturn.app.domain.NetworkUtil.openConnection(urlString)
+                    conn.requestMethod = "GET"
+                    conn.connectTimeout = 10_000
+                    conn.readTimeout = 10_000
+                    conn.connect()
+                }
+
                 if (conn.responseCode == 200) {
                     val jsonStr = conn.inputStream.bufferedReader().use { it.readText() }
                     val json = JSONObject(jsonStr)

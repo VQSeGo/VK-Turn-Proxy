@@ -2,6 +2,7 @@ package com.freeturn.app.ui.navigation
 
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -173,7 +174,11 @@ private fun AppNavHost(
             )
         }
 
-        composable(Routes.CLIENT_SETUP) {
+        composable(
+            route = Routes.CLIENT_SETUP,
+            enterTransition = { fadeIn(animationSpec = tween(300)) },
+            exitTransition = { fadeOut(animationSpec = tween(300)) }
+        ) {
             ClientSetupScreen(
                 settingsViewModel = settingsViewModel,
                 showFinishButton = false
@@ -198,8 +203,11 @@ private fun AppNavHost(
                         )
                     )
                 } else {
-                    null
+                    fadeIn(animationSpec = tween(300))
                 }
+            },
+            exitTransition = {
+                fadeOut(animationSpec = tween(300))
             },
             popEnterTransition = {
                 val fromRoute = initialState.destination.route
@@ -217,8 +225,11 @@ private fun AppNavHost(
                         )
                     )
                 } else {
-                    null
+                    fadeIn(animationSpec = tween(300))
                 }
+            },
+            popExitTransition = {
+                fadeOut(animationSpec = tween(300))
             }
         ) {
             HomeScreen(
@@ -227,7 +238,11 @@ private fun AppNavHost(
             )
         }
 
-        composable(Routes.LOGS) {
+        composable(
+            route = Routes.LOGS,
+            enterTransition = { fadeIn(animationSpec = tween(300)) },
+            exitTransition = { fadeOut(animationSpec = tween(300)) }
+        ) {
             LogsScreen(proxyViewModel = proxyViewModel)
         }
     }

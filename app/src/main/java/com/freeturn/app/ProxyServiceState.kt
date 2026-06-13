@@ -233,5 +233,25 @@ object ProxyServiceState {
 
     fun clearLogs() {
         _logs.value = emptyList()
+        val file = currentLogFile
+        val dir = file?.parentFile
+        logScope.launch {
+            try {
+                synchronized(this@ProxyServiceState) {
+                    if (dir != null && dir.exists()) {
+                        dir.listFiles()?.forEach { f ->
+                            try {
+                                f.delete()
+                            } catch (_: Exception) {}
+                        }
+                    }
+                    if (file != null) {
+                        file.createNewFile()
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 }

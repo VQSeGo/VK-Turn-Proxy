@@ -445,12 +445,15 @@ fun HomeScreen(
                     ) {
                         Icon(
                             painter = painterResource(
-                                if (networkType == NetworkType.WIFI) R.drawable.wifi_24px
-                                else R.drawable.mobile_24px
+                                when (networkType) {
+                                    NetworkType.WIFI -> R.drawable.wifi_24px
+                                    NetworkType.MOBILE -> R.drawable.mobile_24px
+                                    NetworkType.NONE -> R.drawable.error_24px
+                                }
                             ),
                             contentDescription = null,
                             modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            tint = if (networkType == NetworkType.NONE) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(Modifier.width(6.dp))
                         Text(
@@ -460,7 +463,7 @@ fun HomeScreen(
                                 NetworkType.NONE -> "Сеть: не найдена"
                             },
                             style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = if (networkType == NetworkType.NONE) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
 

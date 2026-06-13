@@ -168,10 +168,33 @@ class AppPreferences(context: Context) {
     // Подавляем предупреждения: стабильной замены EncryptedSharedPreferences пока нет
     @Suppress("DEPRECATION")
     private val encryptedPrefs: SharedPreferences by lazy {
+        try {
+            createEncryptedPrefs()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                    val keyStore = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+                    keyStore.deleteEntry(MasterKey.DEFAULT_MASTER_KEY_ALIAS)
+                }
+            } catch (ke: Exception) {
+                ke.printStackTrace()
+            }
+            context.deleteSharedPreferences("secure_ssh_prefs")
+            try {
+                createEncryptedPrefs()
+            } catch (fallbackEx: Exception) {
+                fallbackEx.printStackTrace()
+                context.getSharedPreferences("secure_ssh_prefs_fallback", Context.MODE_PRIVATE)
+            }
+        }
+    }
+
+    private fun createEncryptedPrefs(): SharedPreferences {
         val masterKey = MasterKey.Builder(context)
             .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
             .build()
-        EncryptedSharedPreferences.create(
+        return EncryptedSharedPreferences.create(
             context,
             "secure_ssh_prefs",
             masterKey,
