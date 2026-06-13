@@ -514,6 +514,12 @@ class ProxyService : Service() {
                             (!isVless && nonVlessActive > 0)
                         when {
                             hasConnection -> {
+                                try {
+                                    val cfg = prefs.clientConfigFlow.first()
+                                    val port = cfg.localPort.substringAfterLast(":").toIntOrNull() ?: 9000
+                                    System.setProperty("socksProxyHost", "127.0.0.1")
+                                    System.setProperty("socksProxyPort", port.toString())
+                                } catch (_: Exception) {}
                                 ProxyServiceState.setStartupResult(StartupResult.Success)
                                 ProxyServiceState.markConnectedIfAbsent(SystemClock.elapsedRealtime())
                                 if (coreOnlyMode) {
@@ -566,6 +572,10 @@ class ProxyService : Service() {
                 ProxyServiceState.addLog("КРИТИЧЕСКАЯ ОШИБКА: ${e.message}")
             }
         } finally {
+            try {
+                System.clearProperty("socksProxyHost")
+                System.clearProperty("socksProxyPort")
+            } catch (_: Exception) {}
             stopWireGuardTunnel()
             ProxyServiceState.setCaptchaSession(null)
             ProxyServiceState.setCaptchaVerificationState(CaptchaVerificationState.NONE)
@@ -1123,6 +1133,10 @@ class ProxyService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        try {
+            System.clearProperty("socksProxyHost")
+            System.clearProperty("socksProxyPort")
+        } catch (_: Exception) {}
         userStopped.set(true)
         ProxyServiceState.setRunning(false)
         ProxyServiceState.setConnectionStats(ConnectionStats.IDLE)
