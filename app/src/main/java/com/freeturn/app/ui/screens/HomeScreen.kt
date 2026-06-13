@@ -434,32 +434,34 @@ fun HomeScreen(
                     )
 
                     val networkType = rememberNetworkType()
-                    if (networkType != NetworkType.NONE) {
-                        Spacer(Modifier.height(12.dp))
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center,
-                            modifier = Modifier
-                                .clip(MaterialTheme.shapes.small)
-                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            Icon(
-                                painter = painterResource(
-                                    if (networkType == NetworkType.WIFI) R.drawable.wifi_24px
-                                    else R.drawable.mobile_24px
-                                ),
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                text = if (networkType == NetworkType.WIFI) "Сеть: WI-FI" else "Сеть: LTE",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center,
+                        modifier = Modifier
+                            .clip(MaterialTheme.shapes.small)
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Icon(
+                            painter = painterResource(
+                                if (networkType == NetworkType.WIFI) R.drawable.wifi_24px
+                                else R.drawable.mobile_24px
+                            ),
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = when (networkType) {
+                                NetworkType.WIFI -> "Сеть: WI-FI"
+                                NetworkType.MOBILE -> "Сеть: LTE"
+                                NetworkType.NONE -> "Сеть: не найдена"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
 
                     Spacer(Modifier.height(100.dp))
