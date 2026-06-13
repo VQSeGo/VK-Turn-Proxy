@@ -510,20 +510,9 @@ class ProxyService : Service() {
                     // trying next") как рабочую часть retry-цикла, не как ошибку.
                     // Финальная неудача — "all VK credentials failed".
                     if (!startupEmitted) {
-                        val lower = l.lowercase()
-                        val hasFatal = lower.startsWith("panic:") ||
-                            lower.startsWith("fatal error:") ||
-                            lower.contains("all vk credentials failed") ||
-                            lower.contains("fatal_captcha")
                         val hasConnection = (isVless && vlessActive > 0) ||
                             (!isVless && nonVlessActive > 0)
                         when {
-                            hasFatal -> {
-                                ProxyServiceState.setStartupResult(StartupResult.Failed(l))
-                                updateNotification("Ошибка подключения")
-                                startupFailed = true
-                                startupEmitted = true
-                            }
                             hasConnection -> {
                                 ProxyServiceState.setStartupResult(StartupResult.Success)
                                 ProxyServiceState.markConnectedIfAbsent(SystemClock.elapsedRealtime())
@@ -557,9 +546,14 @@ class ProxyService : Service() {
                     proc.waitForCompat(5, TimeUnit.MINUTES)
                 }) proc.exitValue() else -1
             ProxyServiceState.addLog("=== ПРОЦЕСС ОСТАНОВЛЕН (Код: $exitCode) ===")
-            if (!startupEmitted) {
+
+            val isCancelled = !kotlinx.coroutines.currentCoroutineContext().isActive
+            val willRetry = !userStopped.get() && !isCancelled && !startupFailed && exitCode != 0 && (restartCount.get() < MAX_RESTARTS)
+
+            if (!startupEmitted && !willRetry) {
                 ProxyServiceState.setStartupResult(StartupResult.Failed(
-                    "Процесс завершился без вывода (код: $exitCode)"))
+                    "Процесс завершился (код: $exitCode)"
+                ))
             }
 
         } catch (e: Exception) {
@@ -614,6 +608,7 @@ class ProxyService : Service() {
         ProxyServiceState.setWatchdogAttempt(count)
         if (count > MAX_RESTARTS) {
             ProxyServiceState.addLog("=== WATCHDOG: превышен лимит попыток ($MAX_RESTARTS), остановка ===")
+            ProxyServiceState.setStartupResult(StartupResult.Failed("Не удалось подключиться к серверу после $MAX_RESTARTS попыток"))
             ProxyServiceState.setRunning(false)
             ProxyServiceState.emitFailed()
             stopSelf()

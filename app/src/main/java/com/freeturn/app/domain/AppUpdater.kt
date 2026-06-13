@@ -78,50 +78,59 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
         }
 
         _state.value = UpdateState.Downloading(0)
+        val useProxy = com.freeturn.app.ProxyServiceState.isRunning.value
         try {
-            withContext(Dispatchers.IO) {
-                val connection = openConnection(url)
-                connection.instanceFollowRedirects = true
-                connection.connectTimeout = 15_000
-                connection.readTimeout = 30_000
+            downloadUpdateInternal(url, useProxy)
+        } catch (e: Exception) {
+            if (useProxy) {
                 try {
-                    connection.connect()
-                    // Без проверки кода 404/HTML-страница редиректа запишется в update.apk
-                    // и FileProvider отдаст мусор установщику.
-                    if (connection.responseCode !in 200..299) {
-                        throw java.io.IOException("HTTP ${connection.responseCode}")
-                    }
+                    downloadUpdateInternal(url, false)
+                } catch (e2: Exception) {
+                    apkFile.delete()
+                    _state.value = UpdateState.Error("Ошибка загрузки: ${e2.message}")
+                }
+            } else {
+                apkFile.delete()
+                _state.value = UpdateState.Error("Ошибка загрузки: ${e.message}")
+            }
+        }
+    }
 
-                    val totalSize = connection.contentLength.toLong()
-                    var downloaded = 0L
+    private suspend fun downloadUpdateInternal(url: String, useProxy: Boolean) {
+        withContext(Dispatchers.IO) {
+            val connection = openConnection(url, useProxy)
+            connection.instanceFollowRedirects = true
+            connection.connectTimeout = 15_000
+            connection.readTimeout = 30_000
+            try {
+                connection.connect()
+                if (connection.responseCode !in 200..299) {
+                    throw java.io.IOException("HTTP ${connection.responseCode}")
+                }
 
-                    connection.inputStream.use { input ->
-                        apkFile.outputStream().use { output ->
-                            val buffer = ByteArray(8192)
-                            var bytesRead: Int
-                            while (input.read(buffer).also { bytesRead = it } != -1) {
-                                output.write(buffer, 0, bytesRead)
-                                downloaded += bytesRead
-                                if (totalSize > 0) {
-                                    _state.value = UpdateState.Downloading(
-                                        (downloaded * 100 / totalSize).toInt()
-                                    )
-                                }
+                val totalSize = connection.contentLength.toLong()
+                var downloaded = 0L
+
+                connection.inputStream.use { input ->
+                    apkFile.outputStream().use { output ->
+                        val buffer = ByteArray(8192)
+                        var bytesRead: Int
+                        while (input.read(buffer).also { bytesRead = it } != -1) {
+                            output.write(buffer, 0, bytesRead)
+                            downloaded += bytesRead
+                            if (totalSize > 0) {
+                                _state.value = UpdateState.Downloading(
+                                    (downloaded * 100 / totalSize).toInt()
+                                )
                             }
                         }
                     }
-                } finally {
-                    connection.disconnect()
                 }
+            } finally {
+                connection.disconnect()
             }
-            _state.value = UpdateState.ReadyToInstall
-        } catch (e: CancellationException) {
-            apkFile.delete()
-            throw e
-        } catch (e: Exception) {
-            apkFile.delete()
-            _state.value = UpdateState.Error("Ошибка загрузки: ${e.message}")
         }
+        _state.value = UpdateState.ReadyToInstall
     }
 
     fun installUpdate() {
@@ -146,24 +155,34 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
 
     // Private
 
-    private suspend fun openConnection(urlStr: String): HttpURLConnection {
-        val isRunning = com.freeturn.app.ProxyServiceState.isRunning.value
-        return if (isRunning) {
-            try {
-                val cfg = prefs.clientConfigFlow.first()
-                val port = cfg.localPort.substringAfterLast(":").toIntOrNull() ?: 9000
-                val proxy = java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", port))
-                NetworkUtil.openConnection(urlStr, proxy)
-            } catch (_: Exception) {
-                NetworkUtil.openConnection(urlStr)
-            }
+    private suspend fun openConnection(urlStr: String, useProxy: Boolean): HttpURLConnection {
+        return if (useProxy) {
+            val cfg = prefs.clientConfigFlow.first()
+            val port = cfg.localPort.substringAfterLast(":").toIntOrNull() ?: 9000
+            val proxy = java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", port))
+            NetworkUtil.openConnection(urlStr, proxy)
         } else {
             NetworkUtil.openConnection(urlStr)
         }
     }
 
     private suspend fun fetchLatestRelease(): JSONObject? {
-        val connection = openConnection(RELEASES_URL)
+        val useProxy = com.freeturn.app.ProxyServiceState.isRunning.value
+        return try {
+            fetchLatestReleaseInternal(useProxy)
+        } catch (e: Exception) {
+            if (useProxy) {
+                try {
+                    fetchLatestReleaseInternal(false)
+                } catch (_: Exception) {
+                    null
+                }
+            } else null
+        }
+    }
+
+    private suspend fun fetchLatestReleaseInternal(useProxy: Boolean): JSONObject? {
+        val connection = openConnection(RELEASES_URL, useProxy)
         connection.setRequestProperty("Accept", "application/vnd.github+json")
         connection.connectTimeout = 10_000
         connection.readTimeout = 10_000
