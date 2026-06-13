@@ -131,7 +131,6 @@ class LocalProxyManager(private val context: Context) {
 
         if (_proxyState.value is ProxyState.Error) return
         if (_proxyState.value == ProxyState.Idle) {
-            setErrorWithAutoReset("Запуск отменён (для запуска требуется время)")
             return
         }
 

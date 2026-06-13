@@ -455,7 +455,7 @@ fun HomeScreen(
                             )
                             Spacer(Modifier.width(6.dp))
                             Text(
-                                text = if (networkType == NetworkType.WIFI) "Сеть: WI-FI" else "Сеть: Мобильная",
+                                text = if (networkType == NetworkType.WIFI) "Сеть: WI-FI" else "Сеть: LTE",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
