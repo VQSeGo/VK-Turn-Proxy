@@ -5,9 +5,11 @@
 
 package com.freeturn.app.ui.screens
 
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -41,6 +43,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,6 +52,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
@@ -83,10 +87,38 @@ fun OnboardingScreen(
     var token by rememberSaveable { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var isExiting by remember { mutableStateOf(false) }
+
+    val exitAlpha by animateFloatAsState(
+        targetValue = if (isExiting) 0f else 1f,
+        animationSpec = tween(
+            durationMillis = 400,
+            easing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
+        ),
+        label = "exit_alpha"
+    )
+
+    val exitScale by animateFloatAsState(
+        targetValue = if (isExiting) 1.05f else 1f,
+        animationSpec = tween(
+            durationMillis = 400,
+            easing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
+        ),
+        label = "exit_scale"
+    )
+
+    LaunchedEffect(isExiting) {
+        if (isExiting) {
+            delay(400)
+            onSuccess()
+        }
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .scale(exitScale)
+            .alpha(exitAlpha)
             .background(
                 Brush.verticalGradient(
                     listOf(
@@ -209,8 +241,7 @@ fun OnboardingScreen(
                                 viewModel.saveAuthToken(cleanedToken)
                                 val result = viewModel.fetchAndDecryptConfig(cleanedToken)
                                 if (result.isSuccess) {
-                                    isLoading = false
-                                    onSuccess()
+                                    isExiting = true
                                 } else {
                                     viewModel.saveAuthToken("") // Rollback token on failure
                                     isLoading = false

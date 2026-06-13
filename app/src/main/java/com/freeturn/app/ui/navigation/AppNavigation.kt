@@ -2,9 +2,7 @@ package com.freeturn.app.ui.navigation
 
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.Spring
@@ -161,42 +159,14 @@ private fun AppNavHost(
             .fillMaxSize()
     ) {
         composable(
-            route = Routes.ONBOARDING,
-            exitTransition = {
-                fadeOut(
-                    animationSpec = tween(
-                        durationMillis = 450,
-                        easing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
-                    )
-                ) + scaleOut(
-                    targetScale = 1.05f,
-                    animationSpec = tween(
-                        durationMillis = 450,
-                        easing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
-                    )
-                )
-            },
-            popExitTransition = {
-                fadeOut(
-                    animationSpec = tween(
-                        durationMillis = 450,
-                        easing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
-                    )
-                ) + scaleOut(
-                    targetScale = 1.05f,
-                    animationSpec = tween(
-                        durationMillis = 450,
-                        easing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
-                    )
-                )
-            }
+            route = Routes.ONBOARDING
         ) {
             OnboardingScreen(
                 viewModel = proxyViewModel,
                 onSuccess = {
                     settingsViewModel.setOnboardingDone()
                     navController.navigate(Routes.HOME) {
-                        popUpTo(navController.graph.startDestinationId) { inclusive = true }
+                        popUpTo(Routes.ONBOARDING) { inclusive = true }
                         launchSingleTop = true
                     }
                 }
