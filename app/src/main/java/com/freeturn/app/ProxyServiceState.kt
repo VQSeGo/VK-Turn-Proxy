@@ -37,6 +37,13 @@ data class ConnectionStats(val active: Int, val total: Int) {
     }
 }
 
+enum class CaptchaVerificationState {
+    NONE,
+    REQUIRED,
+    SUBMITTING,
+    FAILED
+}
+
 /**
  * Централизованное состояние прокси-сервиса.
  * Публичный API — только read-only Flow, мутация через явные методы.
@@ -68,6 +75,20 @@ object ProxyServiceState {
 
     private val _connectionStats = MutableStateFlow(ConnectionStats.IDLE)
     val connectionStats: StateFlow<ConnectionStats> = _connectionStats.asStateFlow()
+
+    private val _watchdogAttempt = MutableStateFlow(0)
+    val watchdogAttempt: StateFlow<Int> = _watchdogAttempt.asStateFlow()
+
+    private val _captchaVerificationState = MutableStateFlow(CaptchaVerificationState.NONE)
+    val captchaVerificationState: StateFlow<CaptchaVerificationState> = _captchaVerificationState.asStateFlow()
+
+    fun setWatchdogAttempt(attempt: Int) {
+        _watchdogAttempt.value = attempt
+    }
+
+    fun setCaptchaVerificationState(state: CaptchaVerificationState) {
+        _captchaVerificationState.value = state
+    }
 
     /**
      * Момент первого успешного подключения в рамках текущей сессии пользователя

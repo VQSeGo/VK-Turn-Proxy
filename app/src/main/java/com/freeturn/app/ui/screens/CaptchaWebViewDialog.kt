@@ -144,6 +144,11 @@ fun CaptchaWebViewDialog(
                                     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                         super.onPageStarted(view, url, favicon)
                                         isLoading = true
+                                        if (url != null && (url.contains("localhost") || url.contains("127.0.0.1") || url.contains("8765"))) {
+                                            com.freeturn.app.ProxyServiceState.setCaptchaVerificationState(
+                                                com.freeturn.app.CaptchaVerificationState.SUBMITTING
+                                            )
+                                        }
                                     }
 
                                     override fun onPageFinished(view: WebView?, url: String?) {

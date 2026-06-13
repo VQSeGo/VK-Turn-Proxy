@@ -208,6 +208,7 @@ class ProxyService : Service() {
             }
 
             restartCount.set(0)
+            ProxyServiceState.setWatchdogAttempt(0)
             ProxyServiceState.startNewSession(this)
 
             val powerManager = getSystemService(POWER_SERVICE) as PowerManager
@@ -425,6 +426,7 @@ class ProxyService : Service() {
                         ProxyServiceState.setCaptchaSession(
                             CaptchaSession(url, captchaSessionCounter)
                         )
+                        ProxyServiceState.setCaptchaVerificationState(CaptchaVerificationState.REQUIRED)
                         // Показываем нотификацию только если предыдущая капча уже закрыта.
                         // Бинарник может выдать несколько URL подряд за одну авторизацию —
                         // не плодим спам.
@@ -443,6 +445,12 @@ class ProxyService : Service() {
                     if (authFinished) {
                         ProxyServiceState.setCaptchaSession(null)
                         cancelCaptchaNotification()
+                        val state = if (l.contains("[VK Auth] Success")) {
+                            CaptchaVerificationState.NONE
+                        } else {
+                            CaptchaVerificationState.FAILED
+                        }
+                        ProxyServiceState.setCaptchaVerificationState(state)
                     }
 
                     // Парсинг событий жизненного цикла соединений. Обновляем stats
@@ -523,6 +531,7 @@ class ProxyService : Service() {
                             sessionKillScheduled.set(false)
                             if (!userStopped.get()) {
                                 restartCount.set(0)
+                                ProxyServiceState.setWatchdogAttempt(0)
                                 process.get()?.destroyCompat()
                             }
                         }, 2_000)
@@ -551,6 +560,7 @@ class ProxyService : Service() {
         } finally {
             stopWireGuardTunnel()
             ProxyServiceState.setCaptchaSession(null)
+            ProxyServiceState.setCaptchaVerificationState(CaptchaVerificationState.NONE)
             cancelCaptchaNotification()
             // Процесс мёртв — активных соединений нет. При watchdog-рестарте
             // publishStats на новом старте снова выставит правильный target.
@@ -586,6 +596,7 @@ class ProxyService : Service() {
 
     private fun scheduleWatchdogRestart() {
         val count = restartCount.incrementAndGet()
+        ProxyServiceState.setWatchdogAttempt(count)
         if (count > MAX_RESTARTS) {
             ProxyServiceState.addLog("=== WATCHDOG: превышен лимит попыток ($MAX_RESTARTS), остановка ===")
             ProxyServiceState.setRunning(false)
@@ -654,6 +665,7 @@ class ProxyService : Service() {
                         ProxyServiceState.addLog("=== СМЕНА СЕТИ — ПЕРЕЗАПУСК ===")
                         updateNotification("Смена сети, переподключение...")
                         restartCount.set(0)
+                        ProxyServiceState.setWatchdogAttempt(0)
                         val p = process.get()
                         p?.destroyCompat()
                     }
@@ -1058,6 +1070,8 @@ class ProxyService : Service() {
         ProxyServiceState.setRunning(false)
         ProxyServiceState.setConnectionStats(ConnectionStats.IDLE)
         ProxyServiceState.clearConnectedSince()
+        ProxyServiceState.setWatchdogAttempt(0)
+        ProxyServiceState.setCaptchaVerificationState(CaptchaVerificationState.NONE)
         handler.removeCallbacksAndMessages(null)
         unregisterNetworkCallback()
         cancelCaptchaNotification()

@@ -75,6 +75,10 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.VpnService
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
@@ -130,6 +134,9 @@ fun HomeScreen(
     val connectedSince by proxyViewModel.connectedSince.collectAsStateWithLifecycle()
     val uptimeText = rememberProxyUptime(connectedSince)
     val clientConfig by settingsViewModel.clientConfig.collectAsStateWithLifecycle()
+    val configUpdatedTrigger = remember { mutableStateOf(false) }
+    val watchdogAttempt by com.freeturn.app.ProxyServiceState.watchdogAttempt.collectAsStateWithLifecycle()
+    val captchaVerificationState by com.freeturn.app.ProxyServiceState.captchaVerificationState.collectAsStateWithLifecycle()
 
     // Запрос разрешений при первом открытии главного экрана
     val batteryOptLauncher = rememberLauncherForActivityResult(
@@ -248,7 +255,9 @@ fun HomeScreen(
                         coroutineScope.launch {
                             val result = proxyViewModel.fetchAndDecryptConfig()
                             if (result.isSuccess) {
-                                snackbarHostState.showSnackbar("Конфигурация успешно обновлена")
+                                configUpdatedTrigger.value = true
+                                kotlinx.coroutines.delay(3000)
+                                configUpdatedTrigger.value = false
                             } else {
                                 val err = result.exceptionOrNull()?.message ?: "Ошибка обновления"
                                 snackbarHostState.showSnackbar("Ошибка: $err")
@@ -286,7 +295,9 @@ fun HomeScreen(
                         val result = proxyViewModel.fetchAndDecryptConfig()
                         isRefreshing = false
                         if (result.isSuccess) {
-                            snackbarHostState.showSnackbar("Конфигурация успешно обновлена")
+                            configUpdatedTrigger.value = true
+                            kotlinx.coroutines.delay(3000)
+                            configUpdatedTrigger.value = false
                         } else {
                             val err = result.exceptionOrNull()?.message ?: "Ошибка обновления"
                             snackbarHostState.showSnackbar("Ошибка: $err")
@@ -313,6 +324,7 @@ fun HomeScreen(
                 ) {
                     ProxyToggleButton(
                         state = proxyState,
+                        isConfigUpdated = configUpdatedTrigger.value,
                         onClick = {
                             when (proxyState) {
                                 is ProxyState.Idle, is ProxyState.Error -> {
@@ -350,48 +362,105 @@ fun HomeScreen(
                     Spacer(Modifier.height(24.dp))
 
                     Text(
-                        text = when (val s = proxyState) {
-                            is ProxyState.Running -> {
-                                val base = stringResource(R.string.proxy_active)
-                                val counts = if (s.total > 0) "${s.active}/${s.total}" else "${s.active}"
-                                if (uptimeText != null) "$base — $counts · $uptimeText"
-                                else "$base — $counts"
-                            }
-                            is ProxyState.Connecting -> {
-                                val counts = if (s.total > 0) " (${s.active}/${s.total})" else ""
-                                val stageText = when {
-                                    connectionTimer < 2 -> "Запуск ядра прокси..."
-                                    connectionTimer < 4 -> "Подключение к серверу..."
-                                    connectionTimer < 6 -> "Проверка авторизации..."
-                                    connectionTimer < 9 -> "Создание туннелей smux..."
-                                    connectionTimer < 12 -> "Настройка сетевых маршрутов..."
-                                    else -> "Обычно это не занимает много времени..."
+                        text = if (configUpdatedTrigger.value) {
+                            "Конфигурация обновлена"
+                        } else {
+                            when (val s = proxyState) {
+                                is ProxyState.Running -> {
+                                    val base = stringResource(R.string.proxy_active)
+                                    val counts = if (s.total > 0) "${s.active}/${s.total}" else "${s.active}"
+                                    if (uptimeText != null) "$base — $counts · $uptimeText"
+                                    else "$base — $counts"
                                 }
-                                "$stageText$counts"
-                            }
-                            is ProxyState.Starting -> {
-                                when {
-                                    connectionTimer < 2 -> "Запуск ядра прокси..."
-                                    connectionTimer < 4 -> "Подключение к серверу..."
-                                    connectionTimer < 6 -> "Проверка авторизации..."
-                                    connectionTimer < 9 -> "Создание туннелей smux..."
-                                    connectionTimer < 12 -> "Настройка сетевых маршрутов..."
-                                    else -> "Обычно это не занимает много времени..."
+                                is ProxyState.Connecting -> {
+                                    if (watchdogAttempt > 0) {
+                                        "Переподключение... (Попытка $watchdogAttempt/8)"
+                                    } else {
+                                        val counts = if (s.total > 0) " (${s.active}/${s.total})" else ""
+                                        val stageText = when {
+                                            connectionTimer < 2 -> "Запуск ядра прокси..."
+                                            connectionTimer < 4 -> "Подключение к серверу..."
+                                            connectionTimer < 6 -> "Проверка авторизации..."
+                                            connectionTimer < 9 -> "Создание туннелей smux..."
+                                            connectionTimer < 12 -> "Настройка сетевых маршрутов..."
+                                            else -> "Обычно это не занимает много времени..."
+                                        }
+                                        "$stageText$counts"
+                                    }
                                 }
+                                is ProxyState.Starting -> {
+                                    if (watchdogAttempt > 0) {
+                                        "Переподключение... (Попытка $watchdogAttempt/8)"
+                                    } else {
+                                        when {
+                                            connectionTimer < 2 -> "Запуск ядра прокси..."
+                                            connectionTimer < 4 -> "Подключение к серверу..."
+                                            connectionTimer < 6 -> "Проверка авторизации..."
+                                            connectionTimer < 9 -> "Создание туннелей smux..."
+                                            connectionTimer < 12 -> "Настройка сетевых маршрутов..."
+                                            else -> "Обычно это не занимает много времени..."
+                                        }
+                                    }
+                                }
+                                is ProxyState.Error -> s.message
+                                is ProxyState.CaptchaRequired -> {
+                                    when (captchaVerificationState) {
+                                        com.freeturn.app.CaptchaVerificationState.SUBMITTING -> "Проверка капчи..."
+                                        com.freeturn.app.CaptchaVerificationState.FAILED -> "Неверный ввод, повторите..."
+                                        else -> "Требуется решение капчи..."
+                                    }
+                                }
+                                else -> stringResource(R.string.proxy_press_to_start)
                             }
-                            is ProxyState.Error -> s.message
-                            is ProxyState.CaptchaRequired -> stringResource(R.string.proxy_captcha_required)
-                            else -> stringResource(R.string.proxy_press_to_start)
                         },
                         style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
-                        color = when (proxyState) {
-                            is ProxyState.Running -> MaterialTheme.extendedColorScheme.success
-                            is ProxyState.Error -> MaterialTheme.colorScheme.error
-                            is ProxyState.CaptchaRequired -> MaterialTheme.colorScheme.error
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        color = if (configUpdatedTrigger.value) {
+                            MaterialTheme.extendedColorScheme.success
+                        } else {
+                            when (proxyState) {
+                                is ProxyState.Running -> MaterialTheme.extendedColorScheme.success
+                                is ProxyState.Error -> MaterialTheme.colorScheme.error
+                                is ProxyState.CaptchaRequired -> {
+                                    if (captchaVerificationState == com.freeturn.app.CaptchaVerificationState.REQUIRED) {
+                                        MaterialTheme.extendedColorScheme.warning
+                                    } else {
+                                        MaterialTheme.colorScheme.error
+                                    }
+                                }
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            }
                         },
                         textAlign = TextAlign.Center
                     )
+
+                    val networkType = rememberNetworkType()
+                    if (networkType != NetworkType.NONE) {
+                        Spacer(Modifier.height(12.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .clip(MaterialTheme.shapes.small)
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                painter = painterResource(
+                                    if (networkType == NetworkType.WIFI) R.drawable.wifi_24px
+                                    else R.drawable.mobile_24px
+                                ),
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = if (networkType == NetworkType.WIFI) "Сеть: WI-FI" else "Сеть: Мобильная",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
 
                     Spacer(Modifier.height(100.dp))
                 }
@@ -537,7 +606,11 @@ private fun UpdateDialogs(settingsViewModel: SettingsViewModel) {
 // Кнопка прокси
 
 @Composable
-private fun ProxyToggleButton(state: ProxyState, onClick: () -> Unit) {
+private fun ProxyToggleButton(
+    state: ProxyState,
+    isConfigUpdated: Boolean = false,
+    onClick: () -> Unit
+) {
     val extended = MaterialTheme.extendedColorScheme
     val buttonLabel = when (state) {
         is ProxyState.Starting, is ProxyState.Connecting -> stringResource(R.string.proxy_connecting)
@@ -545,11 +618,15 @@ private fun ProxyToggleButton(state: ProxyState, onClick: () -> Unit) {
         is ProxyState.Error -> stringResource(R.string.proxy_error_restart)
         else -> stringResource(R.string.start_proxy)
     }
+
+    val isInactive = state is ProxyState.Idle || state is ProxyState.Error
+    val showCheckmark = state is ProxyState.Running || (isConfigUpdated && isInactive)
+
     val containerColor by animateColorAsState(
-        targetValue = when (state) {
-            is ProxyState.Running -> extended.successContainer
-            is ProxyState.Error -> MaterialTheme.colorScheme.errorContainer
-            is ProxyState.Starting, is ProxyState.Connecting ->
+        targetValue = when {
+            showCheckmark -> extended.successContainer
+            state is ProxyState.Error -> MaterialTheme.colorScheme.errorContainer
+            state is ProxyState.Starting || state is ProxyState.Connecting ->
                 MaterialTheme.colorScheme.secondaryContainer
             else -> MaterialTheme.colorScheme.primaryContainer
         },
@@ -557,10 +634,10 @@ private fun ProxyToggleButton(state: ProxyState, onClick: () -> Unit) {
         label = "btn_bg"
     )
     val contentColor by animateColorAsState(
-        targetValue = when (state) {
-            is ProxyState.Running -> extended.onSuccessContainer
-            is ProxyState.Error -> MaterialTheme.colorScheme.onErrorContainer
-            is ProxyState.Starting, is ProxyState.Connecting ->
+        targetValue = when {
+            showCheckmark -> extended.onSuccessContainer
+            state is ProxyState.Error -> MaterialTheme.colorScheme.onErrorContainer
+            state is ProxyState.Starting || state is ProxyState.Connecting ->
                 MaterialTheme.colorScheme.onSecondaryContainer
             else -> MaterialTheme.colorScheme.onPrimaryContainer
         },
@@ -589,17 +666,17 @@ private fun ProxyToggleButton(state: ProxyState, onClick: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            when (state) {
-                is ProxyState.Starting, is ProxyState.Connecting ->
+            when {
+                state is ProxyState.Starting || state is ProxyState.Connecting ->
                     LoadingIndicator(
                         color = contentColor,
                         modifier = Modifier.size(60.dp)
                     )
-                is ProxyState.Running -> Icon(
+                showCheckmark -> Icon(
                     painterResource(R.drawable.check_circle_24px), stringResource(R.string.proxy_active_stop),
                     Modifier.size(60.dp), tint = contentColor
                 )
-                is ProxyState.Error -> Icon(
+                state is ProxyState.Error -> Icon(
                     painterResource(R.drawable.error_24px), stringResource(R.string.proxy_error_restart),
                     Modifier.size(60.dp), tint = contentColor
                 )
@@ -935,4 +1012,71 @@ private fun rememberProxyUptime(connectedSince: Long?): String? {
     val m = (totalSec % 3600) / 60
     val s = totalSec % 60
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
+}
+
+private enum class NetworkType {
+    WIFI,
+    MOBILE,
+    NONE
+}
+
+@Composable
+private fun rememberNetworkType(): NetworkType {
+    val context = LocalContext.current
+    return androidx.compose.runtime.produceState(initialValue = NetworkType.NONE) {
+        val cm = context.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        
+        fun getCurrentNetworkType(): NetworkType {
+            return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                val activeNetwork = cm.activeNetwork ?: return NetworkType.NONE
+                val capabilities = cm.getNetworkCapabilities(activeNetwork) ?: return NetworkType.NONE
+                when {
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> NetworkType.WIFI
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> NetworkType.MOBILE
+                    else -> NetworkType.NONE
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                val activeInfo = cm.activeNetworkInfo
+                if (activeInfo == null || !activeInfo.isConnected) return NetworkType.NONE
+                when (activeInfo.type) {
+                    ConnectivityManager.TYPE_WIFI -> NetworkType.WIFI
+                    ConnectivityManager.TYPE_MOBILE -> NetworkType.MOBILE
+                    else -> NetworkType.NONE
+                }
+            }
+        }
+        
+        value = getCurrentNetworkType()
+        
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                value = getCurrentNetworkType()
+            }
+            override fun onLost(network: Network) {
+                value = getCurrentNetworkType()
+            }
+            override fun onCapabilitiesChanged(
+                network: Network,
+                networkCapabilities: NetworkCapabilities
+            ) {
+                value = getCurrentNetworkType()
+            }
+        }
+        
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+            cm.registerDefaultNetworkCallback(callback)
+        } else {
+            val request = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+            cm.registerNetworkCallback(request, callback)
+        }
+        
+        awaitDispose {
+            try {
+                cm.unregisterNetworkCallback(callback)
+            } catch (_: Exception) {}
+        }
+    }.value
 }

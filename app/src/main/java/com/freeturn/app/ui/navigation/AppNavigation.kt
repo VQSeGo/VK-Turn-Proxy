@@ -165,13 +165,13 @@ private fun AppNavHost(
             exitTransition = {
                 fadeOut(
                     animationSpec = tween(
-                        durationMillis = 400,
+                        durationMillis = 450,
                         easing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
                     )
                 ) + scaleOut(
                     targetScale = 1.05f,
                     animationSpec = tween(
-                        durationMillis = 400,
+                        durationMillis = 450,
                         easing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
                     )
                 )
@@ -179,13 +179,13 @@ private fun AppNavHost(
             popExitTransition = {
                 fadeOut(
                     animationSpec = tween(
-                        durationMillis = 400,
+                        durationMillis = 450,
                         easing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
                     )
                 ) + scaleOut(
                     targetScale = 1.05f,
                     animationSpec = tween(
-                        durationMillis = 400,
+                        durationMillis = 450,
                         easing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
                     )
                 )
@@ -217,13 +217,13 @@ private fun AppNavHost(
                 if (fromRoute != Routes.CLIENT_SETUP && fromRoute != Routes.LOGS && fromRoute != Routes.HOME) {
                     fadeIn(
                         animationSpec = tween(
-                            durationMillis = 500,
+                            durationMillis = 450,
                             easing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
                         )
                     ) + scaleIn(
                         initialScale = 0.95f,
                         animationSpec = tween(
-                            durationMillis = 500,
+                            durationMillis = 450,
                             easing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
                         )
                     )
@@ -236,13 +236,13 @@ private fun AppNavHost(
                 if (fromRoute != Routes.CLIENT_SETUP && fromRoute != Routes.LOGS && fromRoute != Routes.HOME) {
                     fadeIn(
                         animationSpec = tween(
-                            durationMillis = 500,
+                            durationMillis = 450,
                             easing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
                         )
                     ) + scaleIn(
                         initialScale = 0.95f,
                         animationSpec = tween(
-                            durationMillis = 500,
+                            durationMillis = 450,
                             easing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
                         )
                     )

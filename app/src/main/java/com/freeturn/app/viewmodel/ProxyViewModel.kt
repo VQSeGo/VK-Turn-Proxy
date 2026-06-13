@@ -119,6 +119,10 @@ class ProxyViewModel(
         ProxyServiceState.clearLogs()
     }
 
+    fun exportLogs() {
+        ProxyServiceState.exportLogs(appContext)
+    }
+
     // --- Subscription & Config Fetching Helpers ---
 
     suspend fun getAuthToken(): String = prefs.getAuthToken()
