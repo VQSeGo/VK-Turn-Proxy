@@ -303,8 +303,11 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
             "https://api.github.com/repos/VQSeGo/VK-Turn-Proxy/releases/latest"
 
         fun isNewer(remote: String, current: String): Boolean {
-            val rParts = remote.split("-", limit = 2)
-            val cParts = current.split("-", limit = 2)
+            val r = remote.removePrefix("v").trim()
+            val c = current.removePrefix("v").trim()
+
+            val rParts = r.split("-", limit = 2)
+            val cParts = c.split("-", limit = 2)
 
             val rNums = rParts[0].split(".").map { it.toIntOrNull() ?: 0 }
             val cNums = cParts[0].split(".").map { it.toIntOrNull() ?: 0 }
@@ -321,24 +324,25 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
             if (rHasPre && !cHasPre) return false
             if (!rHasPre && !cHasPre) return false
 
-            val rPreFields = rParts[1].split(".", "-")
-            val cPreFields = cParts[1].split(".", "-")
-            for (i in 0 until maxOf(rPreFields.size, cPreFields.size)) {
-                val rf = rPreFields.getOrElse(i) { "" }
-                val cf = cPreFields.getOrElse(i) { "" }
-                if (rf == cf) continue
-
-                val rfNum = rf.toIntOrNull()
-                val cfNum = cf.toIntOrNull()
-
-                return when {
-                    rfNum != null && cfNum != null -> rfNum > cfNum
-                    rfNum != null && cfNum == null -> false
-                    rfNum == null && cfNum != null -> true
-                    else -> rf.compareTo(cf) > 0
+            fun getPreReleaseComponents(pre: String): Pair<String, Int> {
+                val clean = pre.lowercase().replace("-", "").replace(".", "")
+                val match = Regex("^([a-z]+)(\\d+)$").matchEntire(clean)
+                if (match != null) {
+                    val name = match.groupValues[1]
+                    val num = match.groupValues[2].toIntOrNull() ?: 0
+                    return Pair(name, num)
                 }
+                return Pair(clean, 0)
             }
-            return false
+
+            val (rName, rNum) = getPreReleaseComponents(rParts[1])
+            val (cName, cNum) = getPreReleaseComponents(cParts[1])
+
+            return if (rName == cName) {
+                rNum > cNum
+            } else {
+                rName.compareTo(cName) > 0
+            }
         }
     }
 }
