@@ -53,7 +53,7 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
             if (isNewer(remoteVersion, getCurrentVersion())) {
                 latestApkUrl = findApkUrl(release)
                 if (latestApkUrl != null) {
-                    val changelog = release.optString("body", "").trim()
+                    val changelog = if (release.isNull("body")) "" else release.optString("body", "").trim()
                     _state.value = UpdateState.Available(remoteVersion, changelog)
                 } else {
                     _state.value = if (silent) UpdateState.Idle
