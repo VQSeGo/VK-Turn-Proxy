@@ -50,6 +50,7 @@ jobs:
       - name: Get Tag Message
         id: tag_message
         run: |
+          git fetch --tags --force
           echo "BODY<<EOF" >> $GITHUB_OUTPUT
           git tag -l --format='%(contents)' ${{ github.ref_name }} >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
