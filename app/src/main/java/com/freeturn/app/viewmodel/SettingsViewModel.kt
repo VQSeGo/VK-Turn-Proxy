@@ -58,6 +58,14 @@ class SettingsViewModel(
 
     val updateState: StateFlow<UpdateState> = appUpdater.state
 
+    val fallbackPin: StateFlow<String?> = prefs.fallbackPinState.asStateFlow()
+
+    fun isKeystoreFailed(): Boolean = prefs.isKeystoreFailed()
+
+    fun verifyAndSetFallbackPin(pin: String): Boolean {
+        return prefs.verifyAndSetFallbackPin(pin)
+    }
+
     private val _isInitialized = MutableStateFlow(false)
     val isInitialized: StateFlow<Boolean> = _isInitialized.asStateFlow()
 

@@ -34,6 +34,14 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import com.freeturn.app.R
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -142,6 +150,67 @@ fun AppNavigation(
                 onDismiss = { proxyViewModel.dismissCaptcha() }
             )
         }
+    }
+
+    val isKeystoreFailed = settingsViewModel.isKeystoreFailed()
+    val fallbackPin by settingsViewModel.fallbackPin.collectAsStateWithLifecycle()
+
+    if (isKeystoreFailed && fallbackPin == null) {
+        var pinInput by rememberSaveable { mutableStateOf("") }
+        var isError by rememberSaveable { mutableStateOf(false) }
+        var errorMessage by rememberSaveable { mutableStateOf("") }
+
+        AlertDialog(
+            onDismissRequest = {},
+            title = {
+                Text(
+                    text = "Защита данных (Keystore сбой)",
+                    style = MaterialTheme.typography.titleMedium
+                )
+            },
+            text = {
+                Column {
+                    Text(
+                        text = "Android Keystore недоступен. Для защиты паролей SSH и ключей WireGuard введите или создайте мастер PIN-код (от 4 символов).",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = pinInput,
+                        onValueChange = {
+                            pinInput = it
+                            isError = false
+                        },
+                        label = { Text("PIN-код") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        isError = isError,
+                        supportingText = if (isError) {
+                            { Text(errorMessage, color = MaterialTheme.colorScheme.error) }
+                        } else null,
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (pinInput.length < 4) {
+                            isError = true
+                            errorMessage = "Минимум 4 символа"
+                        } else {
+                            val success = settingsViewModel.verifyAndSetFallbackPin(pinInput)
+                            if (!success) {
+                                isError = true
+                                errorMessage = "Неверный PIN-код или ошибка сохранения"
+                            }
+                        }
+                    }
+                ) {
+                    Text("Войти")
+                }
+            }
+        )
     }
 
 }

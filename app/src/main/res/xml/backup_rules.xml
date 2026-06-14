@@ -5,4 +5,6 @@
     <exclude domain="sharedpref" path="ProxyPrefs.xml"/>
     <!-- DataStore содержит SSH IP, порт, конфиг клиента — не бэкапим -->
     <exclude domain="file" path="datastore/"/>
+    <exclude domain="file" path="vk_profile.json"/>
+    <exclude domain="sharedpref" path="secure_ssh_prefs_fallback.xml"/>
 </full-backup-content>

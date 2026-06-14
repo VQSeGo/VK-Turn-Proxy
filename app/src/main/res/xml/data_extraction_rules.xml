@@ -7,10 +7,14 @@
         <exclude domain="sharedpref" path="ProxyPrefs.xml"/>
         <!-- DataStore содержит SSH IP, порт, конфиг клиента -->
         <exclude domain="file" path="datastore/"/>
+        <exclude domain="file" path="vk_profile.json"/>
+        <exclude domain="sharedpref" path="secure_ssh_prefs_fallback.xml"/>
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="secure_ssh_prefs.xml"/>
         <exclude domain="sharedpref" path="ProxyPrefs.xml"/>
         <exclude domain="file" path="datastore/"/>
+        <exclude domain="file" path="vk_profile.json"/>
+        <exclude domain="sharedpref" path="secure_ssh_prefs_fallback.xml"/>
     </device-transfer>
 </data-extraction-rules>
