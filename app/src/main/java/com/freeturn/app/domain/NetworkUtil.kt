@@ -16,7 +16,7 @@ import java.net.URL
  */
 object NetworkUtil {
 
-    private const val BROWSER_UA =
+    internal const val BROWSER_UA =
         "Mozilla/5.0 (Linux; Android 14; Pixel 8) " +
         "AppleWebKit/537.36 (KHTML, like Gecko) " +
         "Chrome/125.0.0.0 Mobile Safari/537.36"

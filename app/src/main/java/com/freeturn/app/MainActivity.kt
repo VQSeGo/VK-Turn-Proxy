@@ -57,5 +57,18 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+        handleCheckUpdateIntent(intent)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        handleCheckUpdateIntent(intent)
+    }
+
+    private fun handleCheckUpdateIntent(intent: android.content.Intent?) {
+        if (intent?.action == "com.freeturn.app.CHECK_UPDATE") {
+            settingsViewModel.checkForUpdate()
+        }
     }
 }

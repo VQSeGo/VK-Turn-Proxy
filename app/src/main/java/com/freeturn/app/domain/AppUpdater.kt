@@ -1,10 +1,16 @@
 package com.freeturn.app.domain
 
+import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.Uri
+import android.util.Log
 import androidx.core.content.FileProvider
 import com.freeturn.app.data.AppPreferences
+import kotlinx.coroutines.delay
 import com.freeturn.app.viewmodel.UpdateState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -26,7 +32,10 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
     private var latestApkUrl: String? = null
 
     private val apkFile: File
-        get() = File(context.cacheDir, "update.apk")
+        get() {
+            val dir = context.externalCacheDir ?: context.cacheDir
+            return File(dir, "update.apk")
+        }
 
     private fun getCurrentVersion(): String = try {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.0.0"
@@ -40,32 +49,35 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
      */
     suspend fun checkForUpdate(silent: Boolean = false) {
         _state.value = UpdateState.Checking
+        val proxyReady = com.freeturn.app.ProxyServiceState.isRunning.value &&
+                com.freeturn.app.ProxyServiceState.connectedSince.value != null
+        Log.d("AppUpdater", "checkForUpdate: silent=$silent, proxyReady=$proxyReady")
         try {
             val release = withContext(Dispatchers.IO) { fetchLatestRelease() }
-            if (release == null) {
-                _state.value = if (silent) UpdateState.Idle
-                else UpdateState.Error("Не удалось получить информацию о релизе")
-                return
-            }
 
             val remoteVersion = release.getString("tag_name").removePrefix("v")
+            Log.d("AppUpdater", "Remote version tags: $remoteVersion, current: ${getCurrentVersion()}")
 
             if (isNewer(remoteVersion, getCurrentVersion())) {
                 latestApkUrl = findApkUrl(release)
                 if (latestApkUrl != null) {
                     val changelog = release.optString("body", "").trim()
+                    Log.d("AppUpdater", "New version available: $remoteVersion, URL: $latestApkUrl")
                     _state.value = UpdateState.Available(remoteVersion, changelog)
                 } else {
+                    Log.e("AppUpdater", "APK not found in release assets")
                     _state.value = if (silent) UpdateState.Idle
                     else UpdateState.Error("APK не найден в релизе")
                 }
             } else {
+                Log.d("AppUpdater", "No newer version found. Remote: $remoteVersion, current: ${getCurrentVersion()}")
                 _state.value = UpdateState.NoUpdate
             }
         } catch (e: CancellationException) {
             // Отмена корутины — штатный путь (structured concurrency), не ошибка сети.
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.e("AppUpdater", "Error checking for update", e)
             _state.value = if (silent) UpdateState.Idle
             else UpdateState.Error("Нет соединения с сервером")
         }
@@ -78,7 +90,8 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
         }
 
         _state.value = UpdateState.Downloading(0)
-        val useProxy = com.freeturn.app.ProxyServiceState.isRunning.value
+        val useProxy = com.freeturn.app.ProxyServiceState.isRunning.value &&
+                com.freeturn.app.ProxyServiceState.connectedSince.value != null
         try {
             downloadUpdateInternal(url, useProxy)
         } catch (e: Exception) {
@@ -97,6 +110,14 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
     }
 
     private suspend fun downloadUpdateInternal(url: String, useProxy: Boolean) {
+        if (useProxy) {
+            downloadFileViaDownloadManager(url, apkFile) { progress ->
+                _state.value = UpdateState.Downloading(progress)
+            }
+            _state.value = UpdateState.ReadyToInstall
+            return
+        }
+
         withContext(Dispatchers.IO) {
             var currentUrl = url
             var redirectCount = 0
@@ -105,7 +126,7 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
 
             try {
                 while (redirectCount < maxRedirects) {
-                    val conn = openCustomConnection(currentUrl, useProxy)
+                    val conn = openCustomConnection(currentUrl, false)
                     conn.instanceFollowRedirects = false
                     conn.connectTimeout = 15_000
                     conn.readTimeout = 30_000
@@ -177,60 +198,182 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
 
     // Private
 
-    private suspend fun openConnection(urlStr: String, useProxy: Boolean): HttpURLConnection {
-        return if (useProxy) {
-            val cfg = prefs.clientConfigFlow.first()
-            val port = cfg.localPort.substringAfterLast(":").toIntOrNull() ?: 9000
-            val proxy = java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", port))
-            NetworkUtil.openConnection(urlStr, proxy)
-        } else {
-            NetworkUtil.openConnection(urlStr)
+    /**
+     * Находит активную VPN-сеть, через которую можно пробросить соединение.
+     * Приложение исключено из VPN (ExcludedApplications), но
+     * [android.net.Network.openConnection] позволяет явно привязать сокет
+     * к любой сети, включая VPN.
+     */
+    private fun findVpnNetwork(): android.net.Network? {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val networks = cm.allNetworks
+        Log.d("AppUpdater", "findVpnNetwork: scanning ${networks.size} networks")
+        return networks.firstOrNull { network ->
+            val caps = cm.getNetworkCapabilities(network)
+            val isVpn = caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+            val hasInternet = caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            Log.d("AppUpdater", "Network $network: caps=$caps, isVpn=$isVpn, hasInternet=$hasInternet")
+            isVpn && hasInternet
         }
     }
 
+    /**
+     * Открывает HTTP-соединение. Когда [viaTunnel] = true, соединение
+     * привязывается к VPN-сети через [android.net.Network.openConnection],
+     * минуя ExcludedApplications.
+     */
+    private fun openConnection(urlStr: String, viaTunnel: Boolean): HttpURLConnection {
+        val url = URL(urlStr)
+        if (viaTunnel) {
+            val vpn = findVpnNetwork()
+                ?: throw java.io.IOException("VPN-сеть не найдена")
+            val conn = vpn.openConnection(url) as HttpURLConnection
+            conn.setRequestProperty("User-Agent", NetworkUtil.BROWSER_UA)
+            return conn
+        }
+        return NetworkUtil.openConnection(urlStr)
+    }
+
+    /**
+     * Загружает файл по указанному URL через системный DownloadManager.
+     * Это необходимо при включенном VPN, так как само приложение исключено из VPN
+     * (ExcludedApplications) и прямые попытки привязать сокет к VPN-сети вызывают EPERM.
+     * DownloadManager выполняется под системным UID и не имеет этого ограничения.
+     */
+    private suspend fun downloadFileViaDownloadManager(
+        urlStr: String,
+        destinationFile: File,
+        onProgress: ((Int) -> Unit)? = null
+    ) {
+        withContext(Dispatchers.IO) {
+            val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            if (destinationFile.exists()) {
+                destinationFile.delete()
+            }
+
+            val request = DownloadManager.Request(Uri.parse(urlStr))
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_HIDDEN)
+                .setDestinationUri(Uri.fromFile(destinationFile))
+                .addRequestHeader("User-Agent", NetworkUtil.BROWSER_UA)
+
+            Log.d("AppUpdater", "downloadFileViaDownloadManager: enqueuing request for $urlStr")
+            val downloadId = downloadManager.enqueue(request)
+            Log.d("AppUpdater", "downloadFileViaDownloadManager: enqueued ID=$downloadId")
+
+            var completed = false
+            var success = false
+            var errorReason = ""
+
+            try {
+                val startTime = System.currentTimeMillis()
+                val timeoutMs = if (onProgress != null) 300_000L else 20_000L
+
+                while (!completed && (System.currentTimeMillis() - startTime) < timeoutMs) {
+                    val query = DownloadManager.Query().setFilterById(downloadId)
+                    downloadManager.query(query).use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val statusIdx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                            if (statusIdx != -1) {
+                                val status = cursor.getInt(statusIdx)
+                                if (status == DownloadManager.STATUS_SUCCESSFUL) {
+                                    success = true
+                                    completed = true
+                                } else if (status == DownloadManager.STATUS_FAILED) {
+                                    val reasonIdx = cursor.getColumnIndex(DownloadManager.COLUMN_REASON)
+                                    val reason = if (reasonIdx != -1) cursor.getInt(reasonIdx) else -1
+                                    errorReason = "Загрузка через DownloadManager завершилась с ошибкой: статус=$status, код=$reason"
+                                    completed = true
+                                } else if (status == DownloadManager.STATUS_RUNNING && onProgress != null) {
+                                    val totalIdx = cursor.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+                                    val downloadedIdx = cursor.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+                                    if (totalIdx != -1 && downloadedIdx != -1) {
+                                        val total = cursor.getLong(totalIdx)
+                                        val downloaded = cursor.getLong(downloadedIdx)
+                                        if (total > 0) {
+                                            val progress = (downloaded * 100 / total).toInt()
+                                            onProgress(progress)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (!completed) {
+                        delay(250)
+                    }
+                }
+
+                if (!completed) {
+                    downloadManager.remove(downloadId)
+                    throw java.io.IOException("Таймаут скачивания через DownloadManager")
+                }
+
+                if (!success) {
+                    throw java.io.IOException(errorReason.ifEmpty { "Ошибка скачивания через DownloadManager" })
+                }
+
+                Log.d("AppUpdater", "downloadFileViaDownloadManager: success for ID=$downloadId, size=${destinationFile.length()} bytes")
+
+                if (!destinationFile.exists() || destinationFile.length() == 0L) {
+                    throw java.io.IOException("Скачанный файл пуст или отсутствует")
+                }
+            } finally {
+                if (!success) {
+                    downloadManager.remove(downloadId)
+                    if (destinationFile.exists()) {
+                        destinationFile.delete()
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * DNS-серверы, используемые при обращении через VPN-туннель.
+     * Google и Cloudflare доступны через туннель.
+     */
+    private val proxyDohServers = listOf(
+        DohServer("https://8.8.8.8/resolve?name=%s&type=A"),
+        DohServer("https://1.1.1.1/dns-query?name=%s&type=A", accept = "application/dns-json"),
+    )
+
+    /**
+     * DNS-серверы, используемые при прямом запросе (без прокси).
+     * Яндекс DNS — в белых списках мобильных операторов.
+     */
+    private val directDohServers = listOf(
+        DohServer("https://dns.yandex.com/api/v1/dns-query?name=%s&type=A"),
+    )
+
+    private data class DohServer(val urlTemplate: String, val accept: String? = null)
+
     private suspend fun resolveDnsOverHttps(hostname: String, useProxy: Boolean): String? {
+        val servers = if (useProxy) proxyDohServers else directDohServers
         return withContext(Dispatchers.IO) {
-            try {
-                val urlStr = "https://8.8.8.8/resolve?name=$hostname&type=A"
-                val conn = openConnection(urlStr, useProxy)
-                conn.connectTimeout = 5000
-                conn.readTimeout = 5000
-                conn.connect()
-                if (conn.responseCode == 200) {
-                    val json = JSONObject(conn.inputStream.bufferedReader().readText())
-                    val answers = json.optJSONArray("Answer")
-                    if (answers != null && answers.length() > 0) {
-                        for (i in 0 until answers.length()) {
-                            val ans = answers.getJSONObject(i)
-                            if (ans.optInt("type") == 1) {
-                                return@withContext ans.getString("data")
+            for (server in servers) {
+                try {
+                    val urlStr = server.urlTemplate.format(hostname)
+                    val conn = openConnection(urlStr, useProxy)
+                    server.accept?.let { conn.setRequestProperty("Accept", it) }
+                    conn.connectTimeout = 5000
+                    conn.readTimeout = 5000
+                    conn.connect()
+                    if (conn.responseCode == 200) {
+                        val json = JSONObject(conn.inputStream.bufferedReader().readText())
+                        val answers = json.optJSONArray("Answer")
+                        if (answers != null && answers.length() > 0) {
+                            for (i in 0 until answers.length()) {
+                                val ans = answers.getJSONObject(i)
+                                if (ans.optInt("type") == 1) {
+                                    return@withContext ans.getString("data")
+                                }
                             }
                         }
                     }
+                } catch (e: Exception) {
+                    Log.e("AppUpdater", "DNS DoH resolution failed for ${server.urlTemplate}", e)
                 }
-            } catch (_: Exception) {}
-
-            try {
-                val urlStr = "https://1.1.1.1/dns-query?name=$hostname&type=A"
-                val conn = openConnection(urlStr, useProxy)
-                conn.setRequestProperty("Accept", "application/dns-json")
-                conn.connectTimeout = 5000
-                conn.readTimeout = 5000
-                conn.connect()
-                if (conn.responseCode == 200) {
-                    val json = JSONObject(conn.inputStream.bufferedReader().readText())
-                    val answers = json.optJSONArray("Answer")
-                    if (answers != null && answers.length() > 0) {
-                        for (i in 0 until answers.length()) {
-                            val ans = answers.getJSONObject(i)
-                            if (ans.optInt("type") == 1) {
-                                return@withContext ans.getString("data")
-                            }
-                        }
-                    }
-                }
-            } catch (_: Exception) {}
-
+            }
             null
         }
     }
@@ -259,12 +402,13 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
         return openConnection(urlStr, useProxy)
     }
 
-    private suspend fun fetchLatestRelease(): JSONObject? {
-        val useProxy = com.freeturn.app.ProxyServiceState.isRunning.value
+    private suspend fun fetchLatestRelease(): JSONObject {
+        val proxyReady = com.freeturn.app.ProxyServiceState.isRunning.value &&
+                com.freeturn.app.ProxyServiceState.connectedSince.value != null
         return try {
-            fetchLatestReleaseInternal(useProxy)
+            fetchLatestReleaseInternal(proxyReady)
         } catch (e: Exception) {
-            if (useProxy) {
+            if (proxyReady) {
                 fetchLatestReleaseInternal(false)
             } else {
                 throw e
@@ -272,16 +416,32 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
         }
     }
 
-    private suspend fun fetchLatestReleaseInternal(useProxy: Boolean): JSONObject? {
-        val connection = openCustomConnection(RELEASES_URL, useProxy)
+    private suspend fun fetchLatestReleaseInternal(useProxy: Boolean): JSONObject {
+        if (useProxy) {
+            val dir = context.externalCacheDir ?: context.cacheDir
+            val tempFile = File(dir, "release_${System.currentTimeMillis()}.json")
+            try {
+                downloadFileViaDownloadManager(RELEASES_URL, tempFile, null)
+                val text = tempFile.readText()
+                return JSONObject(text)
+            } finally {
+                if (tempFile.exists()) {
+                    tempFile.delete()
+                }
+            }
+        }
+
+        val connection = openCustomConnection(RELEASES_URL, false)
         connection.setRequestProperty("Accept", "application/vnd.github+json")
         connection.connectTimeout = 10_000
         connection.readTimeout = 10_000
 
-        return try {
-            if (connection.responseCode == 200) {
-                JSONObject(connection.inputStream.bufferedReader().readText())
-            } else null
+        try {
+            val code = connection.responseCode
+            if (code == 200) {
+                return JSONObject(connection.inputStream.bufferedReader().readText())
+            }
+            throw java.io.IOException("GitHub API HTTP $code")
         } finally {
             connection.disconnect()
         }

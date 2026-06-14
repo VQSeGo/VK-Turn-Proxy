@@ -137,6 +137,7 @@ object ProxyServiceState {
     }
 
     fun addLog(msg: String) {
+        android.util.Log.d("ProxyService", msg)
         _logs.update { current ->
             val next = current + msg
             if (next.size > MAX_LOG_LINES) next.drop(next.size - MAX_LOG_LINES) else next
