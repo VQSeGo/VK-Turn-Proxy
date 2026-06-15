@@ -76,7 +76,7 @@ class ProxyService : Service() {
         // События жизненного цикла соединений, публикуемые ядром (client/main.go).
         // Не-VLESS: несколько потоков со своим [STREAM N], у каждого свой Established/Closed.
         private val STREAM_ESTABLISHED_REGEX =
-            Pattern.compile("""\[STREAM (\d+)\] (?:Established DTLS connection|relayed-address=[\d.:]+)""")
+            Pattern.compile("""\[STREAM (\d+)\] (?:Established DTLS connection|relayed-address=[\d.:]+|\[VK Auth\] Success with client_id=\d+)""")
         private val STREAM_CLOSED_REGEX =
             Pattern.compile("""\[STREAM (\d+)\] Closed DTLS connection""")
         // VLESS: ядро само пишет агрегированное число активных сессий.
