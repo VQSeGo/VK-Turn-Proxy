@@ -239,6 +239,34 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
         val url = URL(urlStr)
         val host = url.host
 
+        // 1. Быстрая попытка прямого подключения через системный DNS.
+        // Если хост резолвится и доступен напрямую — возвращаем это соединение без таймаутов DoH.
+        var systemDnsOk = false
+        try {
+            val address = withContext(Dispatchers.IO) {
+                java.net.InetAddress.getByName(host)
+            }
+            if (address != null) {
+                systemDnsOk = true
+            }
+        } catch (_: Exception) {}
+
+        if (systemDnsOk) {
+            try {
+                val conn = openConnection(urlStr, useProxy)
+                conn.connectTimeout = 4000
+                conn.readTimeout = 8000
+                val code = conn.responseCode
+                if (code in 200..399 || code == 404 || code == 403) {
+                    return conn
+                }
+                conn.disconnect()
+            } catch (_: Exception) {
+                // Системный коннект не удался (блокировка/SSL-подмена) -> переходим к DoH
+            }
+        }
+
+        // 2. Резервный путь: обход блокировок через DNS-over-HTTPS (DoH)
         if (url.protocol.lowercase() == "https" && !host.matches(Regex("^[0-9.]+$"))) {
             val ip = resolveDnsOverHttps(host, useProxy)
             if (ip != null) {
@@ -246,13 +274,15 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
                 val path = url.file
                 val rewrittenUrlStr = "https://$ip$portStr$path"
 
-                val conn = openConnection(rewrittenUrlStr, useProxy) as javax.net.ssl.HttpsURLConnection
-                val defaultFactory = javax.net.ssl.HttpsURLConnection.getDefaultSSLSocketFactory()
-                conn.sslSocketFactory = SniSSLSocketFactory(defaultFactory, host)
-                conn.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, session ->
-                    javax.net.ssl.HttpsURLConnection.getDefaultHostnameVerifier().verify(host, session)
-                }
-                return conn
+                try {
+                    val conn = openConnection(rewrittenUrlStr, useProxy) as javax.net.ssl.HttpsURLConnection
+                    val defaultFactory = javax.net.ssl.HttpsURLConnection.getDefaultSSLSocketFactory()
+                    conn.sslSocketFactory = SniSSLSocketFactory(defaultFactory, host)
+                    conn.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, session ->
+                        javax.net.ssl.HttpsURLConnection.getDefaultHostnameVerifier().verify(host, session)
+                    }
+                    return conn
+                } catch (_: Exception) {}
             }
         }
 
