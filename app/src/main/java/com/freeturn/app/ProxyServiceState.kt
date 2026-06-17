@@ -56,7 +56,7 @@ object ProxyServiceState {
     private const val MAX_LOG_LINES = 200
 
     @Volatile private var currentLogFile: File? = null
-    private val logScope = CoroutineScope(Dispatchers.IO)
+    private val logScope = CoroutineScope(Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
 
     private val _isRunning = MutableStateFlow(false)
     val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()

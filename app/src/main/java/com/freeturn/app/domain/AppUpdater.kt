@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -82,10 +83,12 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
         try {
             downloadUpdateInternal(url, useProxy)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             if (useProxy) {
                 try {
                     downloadUpdateInternal(url, false)
                 } catch (e2: Exception) {
+                    if (e2 is CancellationException) throw e2
                     apkFile.delete()
                     _state.value = UpdateState.Error("Ошибка загрузки: ${e2.message}")
                 }
@@ -105,7 +108,7 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
 
             try {
                 while (redirectCount < maxRedirects) {
-                    val conn = openCustomConnection(currentUrl, useProxy)
+                    val conn = openConnection(currentUrl, useProxy)
                     conn.instanceFollowRedirects = false
                     conn.connectTimeout = 15_000
                     conn.readTimeout = 30_000
@@ -138,6 +141,9 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
                         val buffer = ByteArray(8192)
                         var bytesRead: Int
                         while (input.read(buffer).also { bytesRead = it } != -1) {
+                            if (!isActive) {
+                                throw CancellationException("Download cancelled")
+                            }
                             output.write(buffer, 0, bytesRead)
                             downloaded += bytesRead
                             if (totalSize > 0) {
@@ -161,14 +167,18 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
             return
         }
 
-        val uri = FileProvider.getUriForFile(
-            context, "${context.packageName}.fileprovider", apkFile
-        )
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "application/vnd.android.package-archive")
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+        try {
+            val uri = FileProvider.getUriForFile(
+                context, "${context.packageName}.fileprovider", apkFile
+            )
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            _state.value = UpdateState.Error("Не удалось запустить установщик пакетов: ${e.message}")
         }
-        context.startActivity(intent)
     }
 
     fun resetState() {
@@ -188,107 +198,6 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
         }
     }
 
-    private suspend fun resolveDnsOverHttps(hostname: String, useProxy: Boolean): String? {
-        return withContext(Dispatchers.IO) {
-            try {
-                val urlStr = "https://8.8.8.8/resolve?name=$hostname&type=A"
-                val conn = openConnection(urlStr, useProxy)
-                conn.connectTimeout = 5000
-                conn.readTimeout = 5000
-                conn.connect()
-                if (conn.responseCode == 200) {
-                    val json = JSONObject(conn.inputStream.bufferedReader().readText())
-                    val answers = json.optJSONArray("Answer")
-                    if (answers != null && answers.length() > 0) {
-                        for (i in 0 until answers.length()) {
-                            val ans = answers.getJSONObject(i)
-                            if (ans.optInt("type") == 1) {
-                                return@withContext ans.getString("data")
-                            }
-                        }
-                    }
-                }
-            } catch (_: Exception) {}
-
-            try {
-                val urlStr = "https://1.1.1.1/dns-query?name=$hostname&type=A"
-                val conn = openConnection(urlStr, useProxy)
-                conn.setRequestProperty("Accept", "application/dns-json")
-                conn.connectTimeout = 5000
-                conn.readTimeout = 5000
-                conn.connect()
-                if (conn.responseCode == 200) {
-                    val json = JSONObject(conn.inputStream.bufferedReader().readText())
-                    val answers = json.optJSONArray("Answer")
-                    if (answers != null && answers.length() > 0) {
-                        for (i in 0 until answers.length()) {
-                            val ans = answers.getJSONObject(i)
-                            if (ans.optInt("type") == 1) {
-                                return@withContext ans.getString("data")
-                            }
-                        }
-                    }
-                }
-            } catch (_: Exception) {}
-
-            null
-        }
-    }
-
-    private suspend fun openCustomConnection(urlStr: String, useProxy: Boolean): HttpURLConnection {
-        val url = URL(urlStr)
-        val host = url.host
-
-        // 1. Быстрая попытка прямого подключения через системный DNS.
-        // Если хост резолвится и доступен напрямую — возвращаем это соединение без таймаутов DoH.
-        var systemDnsOk = false
-        try {
-            val address = withContext(Dispatchers.IO) {
-                java.net.InetAddress.getByName(host)
-            }
-            if (address != null) {
-                systemDnsOk = true
-            }
-        } catch (_: Exception) {}
-
-        if (systemDnsOk) {
-            try {
-                val conn = openConnection(urlStr, useProxy)
-                conn.connectTimeout = 4000
-                conn.readTimeout = 8000
-                val code = conn.responseCode
-                if (code in 200..399 || code == 404 || code == 403) {
-                    return conn
-                }
-                conn.disconnect()
-            } catch (_: Exception) {
-                // Системный коннект не удался (блокировка/SSL-подмена) -> переходим к DoH
-            }
-        }
-
-        // 2. Резервный путь: обход блокировок через DNS-over-HTTPS (DoH)
-        if (url.protocol.lowercase() == "https" && !host.matches(Regex("^[0-9.]+$"))) {
-            val ip = resolveDnsOverHttps(host, useProxy)
-            if (ip != null) {
-                val portStr = if (url.port != -1) ":${url.port}" else ""
-                val path = url.file
-                val rewrittenUrlStr = "https://$ip$portStr$path"
-
-                try {
-                    val conn = openConnection(rewrittenUrlStr, useProxy) as javax.net.ssl.HttpsURLConnection
-                    val defaultFactory = javax.net.ssl.HttpsURLConnection.getDefaultSSLSocketFactory()
-                    conn.sslSocketFactory = SniSSLSocketFactory(defaultFactory, host)
-                    conn.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, session ->
-                        javax.net.ssl.HttpsURLConnection.getDefaultHostnameVerifier().verify(host, session)
-                    }
-                    return conn
-                } catch (_: Exception) {}
-            }
-        }
-
-        return openConnection(urlStr, useProxy)
-    }
-
     private suspend fun fetchLatestRelease(): JSONObject? {
         val useProxy = com.freeturn.app.ProxyServiceState.isRunning.value
         return try {
@@ -303,7 +212,7 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
     }
 
     private suspend fun fetchLatestReleaseInternal(useProxy: Boolean): JSONObject? {
-        val connection = openCustomConnection(RELEASES_URL, useProxy)
+        val connection = openConnection(RELEASES_URL, useProxy)
         connection.setRequestProperty("Accept", "application/vnd.github+json")
         connection.connectTimeout = 10_000
         connection.readTimeout = 10_000
@@ -375,23 +284,4 @@ class AppUpdater(private val context: Context, private val prefs: AppPreferences
             }
         }
     }
-}
-
-class SniSSLSocketFactory(
-    private val delegate: javax.net.ssl.SSLSocketFactory,
-    private val targetHost: String
-) : javax.net.ssl.SSLSocketFactory() {
-    override fun getDefaultCipherSuites(): Array<String> = delegate.defaultCipherSuites
-    override fun getSupportedCipherSuites(): Array<String> = delegate.supportedCipherSuites
-
-    override fun createSocket(s: java.net.Socket?, host: String?, port: Int, autoClose: Boolean): java.net.Socket {
-        return delegate.createSocket(s, targetHost, port, autoClose)
-    }
-
-    override fun createSocket(host: String?, port: Int): java.net.Socket = delegate.createSocket(host, port)
-    override fun createSocket(host: String?, port: Int, localHost: java.net.InetAddress?, localPort: Int): java.net.Socket =
-        delegate.createSocket(host, port, localHost, localPort)
-    override fun createSocket(address: java.net.InetAddress?, port: Int): java.net.Socket = delegate.createSocket(address, port)
-    override fun createSocket(address: java.net.InetAddress?, port: Int, localAddress: java.net.InetAddress?, localPort: Int): java.net.Socket =
-        delegate.createSocket(address, port, localAddress, localPort)
 }

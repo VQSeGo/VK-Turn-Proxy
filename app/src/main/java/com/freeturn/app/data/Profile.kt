@@ -78,6 +78,7 @@ internal object ProfileJson {
             put("syncServerSwitches", p.client.syncServerSwitches)
             put("magicSwitch", p.client.magicSwitch)
             put("magicTurn", p.client.magicTurn)
+            put("clientId", p.client.clientId)
         })
         put("proxyListen", p.proxyListen)
         put("proxyConnect", p.proxyConnect)
@@ -127,7 +128,8 @@ internal object ProfileJson {
                 forcePort443 = cliO.optBoolean("forcePort443", false),
                 syncServerSwitches = cliO.optBoolean("syncServerSwitches", true),
                 magicSwitch = cliO.optBoolean("magicSwitch", false),
-                magicTurn = cliO.optString("magicTurn")
+                magicTurn = cliO.optString("magicTurn"),
+                clientId = cliO.optString("clientId")
             ),
             proxyListen = o.optString("proxyListen").ifBlank { "0.0.0.0:56000" },
             proxyConnect = o.optString("proxyConnect").ifBlank { "127.0.0.1:40537" },

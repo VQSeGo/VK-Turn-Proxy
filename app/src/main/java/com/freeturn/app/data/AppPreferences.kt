@@ -79,7 +79,8 @@ data class ClientConfig(
     val syncServerSwitches: Boolean = true,
     val magicSwitch: Boolean = false,
     /** Адрес для флага -turn ядра, если magicSwitch включён. Пусто = не передавать. */
-    val magicTurn: String = ""
+    val magicTurn: String = "",
+    val clientId: String = ""
 )
 
 class AppPreferences(context: Context) {
@@ -159,6 +160,7 @@ class AppPreferences(context: Context) {
         val CLIENT_SYNC_SERVER = booleanPreferencesKey("client_sync_server")
         val CLIENT_MAGIC_SWITCH = booleanPreferencesKey("client_magic_switch")
         val CLIENT_MAGIC_TURN = stringPreferencesKey("client_magic_turn")
+        val CLIENT_ID = stringPreferencesKey("client_id")
         // Устаревшие ключи — не пишутся, но молча удаляются при saveClientConfig.
         private val CLIENT_ALLOCS_PER_STREAM_LEGACY = intPreferencesKey("client_allocs_per_stream")
         private val CLIENT_TURN_PORT_443_LEGACY = booleanPreferencesKey("client_turn_port_443")
@@ -402,7 +404,8 @@ class AppPreferences(context: Context) {
                 forcePort443 = prefs[CLIENT_FORCE_PORT_443] ?: false,
                 syncServerSwitches = prefs[CLIENT_SYNC_SERVER] ?: true,
                 magicSwitch = prefs[CLIENT_MAGIC_SWITCH] ?: false,
-                magicTurn = prefs[CLIENT_MAGIC_TURN] ?: ""
+                magicTurn = prefs[CLIENT_MAGIC_TURN] ?: "",
+                clientId = prefs[CLIENT_ID] ?: ""
             )
         }
 
@@ -535,6 +538,7 @@ class AppPreferences(context: Context) {
             prefs[CLIENT_SYNC_SERVER] = config.syncServerSwitches
             prefs[CLIENT_MAGIC_SWITCH] = config.magicSwitch
             prefs[CLIENT_MAGIC_TURN] = config.magicTurn.trim()
+            prefs[CLIENT_ID] = config.clientId
             // Удаляем устаревшие ключи.
             prefs.remove(CLIENT_TURN_PORT_443_LEGACY)
             prefs.remove(CLIENT_ALLOCS_PER_STREAM_LEGACY)
@@ -623,6 +627,15 @@ class AppPreferences(context: Context) {
     suspend fun saveSubscriptionExpiresAt(timestamp: Long) = withContext(Dispatchers.IO) {
         putEncryptedLong("sub_expires_at", timestamp)
         Unit
+    }
+
+    suspend fun getClientId(): String = withContext(Dispatchers.IO) {
+        context.dataStore.data.map { prefs -> prefs[CLIENT_ID] ?: "" }.first()
+    }
+    suspend fun saveClientId(clientId: String) {
+        context.dataStore.edit { prefs ->
+            prefs[CLIENT_ID] = clientId
+        }
     }
 
     suspend fun getWgConfig(): String = withContext(Dispatchers.IO) {

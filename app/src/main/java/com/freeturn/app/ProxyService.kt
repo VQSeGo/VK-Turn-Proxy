@@ -76,7 +76,7 @@ class ProxyService : Service() {
         // События жизненного цикла соединений, публикуемые ядром (client/main.go).
         // Не-VLESS: несколько потоков со своим [STREAM N], у каждого свой Established/Closed.
         private val STREAM_ESTABLISHED_REGEX =
-            Pattern.compile("""\[STREAM (\d+)\] (?:Established DTLS connection|relayed-address=[\d.:]+|\[VK Auth\] Success with client_id=\d+)""")
+            Pattern.compile("""\[STREAM (\d+)\] Established DTLS connection""")
         private val STREAM_CLOSED_REGEX =
             Pattern.compile("""\[STREAM (\d+)\] Closed DTLS connection""")
         // VLESS: ядро само пишет агрегированное число активных сессий.
@@ -84,7 +84,7 @@ class ProxyService : Service() {
             Pattern.compile("""\[session \d+\] (?:connected|disconnected) \(active: (\d+)\)""")
         // VLESS: целевое число сессий приходит в этой строке до первого connected.
         private val VLESS_TOTAL_REGEX =
-            Pattern.compile("""VLESS mode: waiting for sessions to connect \(total: (\d+)\)""")
+            Pattern.compile("""(?:VLESS|TCP) mode: waiting for sessions to connect \(total: (\d+)\)""")
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -198,7 +198,7 @@ class ProxyService : Service() {
             ProxyServiceState.setStartupResult(StartupResult.Failed("Запуск отклонён: обнаружен WI-FI"))
             ProxyServiceState.setRunning(false)
             android.widget.Toast.makeText(
-                this,
+                applicationContext,
                 "Запуск отклонён: обнаружен WI-FI",
                 android.widget.Toast.LENGTH_LONG
             ).show()
@@ -300,6 +300,8 @@ class ProxyService : Service() {
             if (cfg.streamsPerCred > 0) {
                 cmdArgs.add("-streams-per-cred"); cmdArgs.add(cfg.streamsPerCred.toString())
             }
+            val finalClientId = cfg.clientId.trim().ifBlank { "9467016e7401108c859eee87b86eb02e" }
+            cmdArgs.add("-client-id"); cmdArgs.add(finalClientId)
             if (cfg.vlessMode) {
                 cmdArgs.add("-mode"); cmdArgs.add("tcp")
                 if (srv.vlessBond) cmdArgs.add("-bond")
@@ -666,7 +668,7 @@ class ProxyService : Service() {
                         stoppedByWifi = true
                         handler.post {
                             android.widget.Toast.makeText(
-                                this@ProxyService,
+                                applicationContext,
                                 "Прокси отключен: обнаружен WI-FI",
                                 android.widget.Toast.LENGTH_LONG
                             ).show()
@@ -713,7 +715,7 @@ class ProxyService : Service() {
                         stoppedByWifi = true
                         handler.post {
                             android.widget.Toast.makeText(
-                                this@ProxyService,
+                                applicationContext,
                                 "Прокси отключен: обнаружен WI-FI",
                                 android.widget.Toast.LENGTH_LONG
                             ).show()
@@ -728,13 +730,17 @@ class ProxyService : Service() {
             }
         }
         networkCallback = cb
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            cm.registerDefaultNetworkCallback(cb)
-        } else {
-            val request = NetworkRequest.Builder()
-                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                .build()
-            cm.registerNetworkCallback(request, cb)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                cm.registerDefaultNetworkCallback(cb)
+            } else {
+                val request = NetworkRequest.Builder()
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .build()
+                cm.registerNetworkCallback(request, cb)
+            }
+        } catch (e: Exception) {
+            ProxyServiceState.addLog("Не удалось зарегистрировать сетевой коллбек: ${e.message}")
         }
     }
 
@@ -847,7 +853,7 @@ class ProxyService : Service() {
             val config = Config.parse(configText.byteInputStream())
 
             if (wgBackend == null) {
-                wgBackend = GoBackend(this)
+                wgBackend = GoBackend(applicationContext)
             }
 
             wgBackend?.setState(turnTunnel, Tunnel.State.UP, config)
@@ -900,19 +906,25 @@ class ProxyService : Service() {
             var configUrl = ""
             var decryptionKey = ""
             var authException: Throwable? = null
+            var responseClientId = ""
 
             val authResult = performTokenAuth(token)
             if (authResult.isSuccess) {
                 val response = authResult.getOrThrow()
                 configUrl = response.configUrl
                 decryptionKey = response.decryptionKey
+                responseClientId = response.clientId
+                ProxyServiceState.addLog("Авторизация успешна. Получен Client ID: $responseClientId")
                 prefs.saveConfigUrl(configUrl)
                 prefs.saveDecryptionKey(decryptionKey)
                 prefs.saveSubscriptionExpiresAt(response.endsAt)
+                prefs.saveClientId(response.clientId)
             } else {
                 authException = authResult.exceptionOrNull()
                 configUrl = prefs.getConfigUrl()
                 decryptionKey = prefs.getDecryptionKey()
+                responseClientId = prefs.getClientId()
+                ProxyServiceState.addLog("Сбой авторизации (используем кэш): ${authException?.message}. Сохранённый Client ID: $responseClientId")
             }
 
             if (configUrl.isEmpty() || decryptionKey.isEmpty()) {
@@ -1006,7 +1018,8 @@ class ProxyService : Service() {
                         useUdp = relay.optBoolean("udp", current.useUdp),
                         manualCaptcha = appSettings?.optBoolean("manual_captcha", current.manualCaptcha) ?: current.manualCaptcha,
                         isRawMode = current.isRawMode,
-                        rawCommand = current.rawCommand
+                        rawCommand = current.rawCommand,
+                        clientId = responseClientId
                     )
 
                     prefs.saveClientConfig(updatedConfig)
@@ -1130,7 +1143,8 @@ class ProxyService : Service() {
                     val configUrl = json.getString("config_url")
                     val decryptionKey = json.getString("decryption_key")
                     val endsAt = json.optLong("ends_at", 0L)
-                    Result.success(ServiceAuthResponse(configUrl, decryptionKey, endsAt))
+                    val clientId = json.optString("client_id", "")
+                    Result.success(ServiceAuthResponse(configUrl, decryptionKey, endsAt, clientId))
                 } else if (conn.responseCode == 403) {
                     Result.failure(Exception("Неверный токен или подписка неактивна"))
                 } else {
@@ -1151,7 +1165,7 @@ class ProxyService : Service() {
         }
     }
 
-    private data class ServiceAuthResponse(val configUrl: String, val decryptionKey: String, val endsAt: Long)
+    private data class ServiceAuthResponse(val configUrl: String, val decryptionKey: String, val endsAt: Long, val clientId: String)
 
     override fun onDestroy() {
         super.onDestroy()

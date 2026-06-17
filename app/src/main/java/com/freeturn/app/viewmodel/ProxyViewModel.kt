@@ -233,20 +233,26 @@ class ProxyViewModel(
             var authException: Throwable? = null
 
             // 1. Try to perform token authorization to get fresh URL and key
+            var responseClientId = ""
             val authResult = performTokenAuth(token)
             if (authResult.isSuccess) {
                 val response = authResult.getOrThrow()
                 configUrl = response.configUrl
                 decryptionKey = response.decryptionKey
+                responseClientId = response.clientId
+                ProxyServiceState.addLog("Авторизация успешна. Получен Client ID: $responseClientId")
                 saveConfigUrl(configUrl)
                 saveDecryptionKey(decryptionKey)
                 saveSubscriptionExpiresAt(response.endsAt)
+                prefs.saveClientId(response.clientId)
             } else {
                 authException = authResult.exceptionOrNull()
                 // Auth failed (network down / server down).
                 // Try to use previously saved config_url and decryption_key as fallback!
                 configUrl = getConfigUrl()
                 decryptionKey = getDecryptionKey()
+                responseClientId = prefs.getClientId()
+                ProxyServiceState.addLog("Сбой авторизации (используем кэш): ${authException?.message}. Сохранённый Client ID: $responseClientId")
             }
 
             if (configUrl.isEmpty() || decryptionKey.isEmpty()) {
@@ -347,7 +353,8 @@ class ProxyViewModel(
                         forcePort443 = forcePort443,
                         syncServerSwitches = syncServerSwitches,
                         magicSwitch = alternativeTurnEnabled,
-                        magicTurn = alternativeTurnAddress
+                        magicTurn = alternativeTurnAddress,
+                        clientId = responseClientId
                     )
 
                     prefs.saveClientConfig(updatedConfig)
@@ -475,7 +482,8 @@ class ProxyViewModel(
                     val configUrl = json.getString("config_url")
                     val decryptionKey = json.getString("decryption_key")
                     val endsAt = json.optLong("ends_at", 0L)
-                    Result.success(AuthResponse(configUrl, decryptionKey, endsAt))
+                    val clientId = json.optString("client_id", "")
+                    Result.success(AuthResponse(configUrl, decryptionKey, endsAt, clientId))
                 } else if (conn.responseCode == 403) {
                     Result.failure(Exception("Неверный токен или подписка неактивна"))
                 } else {
@@ -497,4 +505,4 @@ class ProxyViewModel(
     }
 }
 
-data class AuthResponse(val configUrl: String, val decryptionKey: String, val endsAt: Long)
+data class AuthResponse(val configUrl: String, val decryptionKey: String, val endsAt: Long, val clientId: String)

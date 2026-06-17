@@ -86,6 +86,7 @@ fun ClientSetupScreen(
     var dnsMode by rememberSaveable(saved.dnsMode) { mutableStateOf(saved.dnsMode) }
     var magicSwitch by rememberSaveable(saved.magicSwitch) { mutableStateOf(saved.magicSwitch) }
     var magicTurn by rememberSaveable(saved.magicTurn) { mutableStateOf(saved.magicTurn) }
+    var debugMode by rememberSaveable(saved.debugMode) { mutableStateOf(saved.debugMode) }
     var lastSliderInt by rememberSaveable { mutableIntStateOf(saved.threads) }
     var lastStreamsInt by rememberSaveable { mutableIntStateOf(saved.streamsPerCred) }
     var showResetDialog by remember { mutableStateOf(false) }
@@ -106,10 +107,11 @@ fun ClientSetupScreen(
         if (dnsMode != saved.dnsMode) dnsMode = saved.dnsMode
         if (magicSwitch != saved.magicSwitch) magicSwitch = saved.magicSwitch
         if (magicTurn != saved.magicTurn) magicTurn = saved.magicTurn
+        if (debugMode != saved.debugMode) debugMode = saved.debugMode
     }
 
     // Auto-save with debounce 600 ms
-    LaunchedEffect(vkLink, useCustomVkLink, threads, streamsPerCred, useCarrierDns, dnsMode, magicSwitch, magicTurn) {
+    LaunchedEffect(vkLink, useCustomVkLink, threads, streamsPerCred, useCarrierDns, dnsMode, magicSwitch, magicTurn, debugMode) {
         delay(600)
         val newConfig = saved.copy(
             vkLink = vkLink.trim(),
@@ -119,7 +121,8 @@ fun ClientSetupScreen(
             useCarrierDns = useCarrierDns,
             dnsMode = dnsMode,
             magicSwitch = magicSwitch,
-            magicTurn = magicTurn.trim()
+            magicTurn = magicTurn.trim(),
+            debugMode = debugMode
         )
         if (newConfig != saved) {
             settingsViewModel.saveClientConfig(newConfig)
@@ -326,6 +329,21 @@ fun ClientSetupScreen(
                     onCheckedChange = {
                         HapticUtil.perform(context, if (it) HapticUtil.Pattern.TOGGLE_ON else HapticUtil.Pattern.TOGGLE_OFF)
                         useCarrierDns = it
+                    }
+                )
+
+                HorizontalDivider()
+
+                // Категория: Логирование
+                Text("Логирование", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+
+                SwitchRow(
+                    label = stringResource(R.string.debug_mode),
+                    description = stringResource(R.string.debug_mode_desc),
+                    checked = debugMode,
+                    onCheckedChange = {
+                        HapticUtil.perform(context, if (it) HapticUtil.Pattern.TOGGLE_ON else HapticUtil.Pattern.TOGGLE_OFF)
+                        debugMode = it
                     }
                 )
 
